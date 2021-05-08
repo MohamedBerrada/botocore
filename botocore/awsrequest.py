@@ -254,9 +254,11 @@ def prepare_request_dict(request_dict, endpoint_url, context=None,
     host_prefix = r.get('host_prefix')
 
     endpoint_url_domain = urlparse(endpoint_url).netloc
+    logger.info(endpoint_url_domain)
+    logger.info(url_path)
     if endpoint_url_domain in r['url_path']:
         r['url_path'] = r['url_path'].replace('/{}'.format(endpoint_url_domain), '')
-
+        
     url = _urljoin(endpoint_url, r['url_path'], host_prefix)
     if r['query_string']:
         # NOTE: This is to avoid circular import with utils. This is being
