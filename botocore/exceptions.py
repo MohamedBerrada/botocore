@@ -12,6 +12,7 @@
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 from __future__ import unicode_literals
+
 from botocore.vendored import requests
 from botocore.vendored.requests.packages import urllib3
 
@@ -65,6 +66,17 @@ class UnknownServiceError(DataNotFoundError):
         "{known_service_names}")
 
 
+class UnknownRegionError(BotoCoreError):
+    """Raised when trying to load data for an unknown region.
+
+    :ivar region_name: The name of the unknown region.
+
+    """
+    fmt = (
+        "Unknown region: '{region_name}'. {error_msg}"
+    )
+
+
 class ApiVersionNotFoundError(BotoCoreError):
     """
     The data associated with either the API version or a compatible one
@@ -78,6 +90,7 @@ class ApiVersionNotFoundError(BotoCoreError):
 
 class HTTPClientError(BotoCoreError):
     fmt = 'An HTTP Client raised an unhandled exception: {error}'
+
     def __init__(self, request=None, response=None, **kwargs):
         self.request = request
         self.response = response
@@ -94,6 +107,13 @@ class ConnectionError(BotoCoreError):
 
 class InvalidIMDSEndpointError(BotoCoreError):
     fmt = 'Invalid endpoint EC2 Instance Metadata endpoint: {endpoint}'
+
+
+class InvalidIMDSEndpointModeError(BotoCoreError):
+    fmt = (
+        'Invalid EC2 Instance Metadata endpoint mode: {mode}'
+        ' Valid endpoint modes (case-insensitive): {valid_modes}.'
+    )
 
 
 class EndpointConnectionError(ConnectionError):
@@ -121,6 +141,10 @@ class ConnectTimeoutError(ConnectionError, requests.exceptions.ConnectTimeout):
 
 class ProxyConnectionError(ConnectionError, requests.exceptions.ProxyError):
     fmt = 'Failed to connect to proxy URL: "{proxy_url}"'
+
+
+class ResponseStreamingError(HTTPClientError):
+    fmt = 'An error occurred while reading from response stream: {error}'
 
 
 class NoCredentialsError(BotoCoreError):
@@ -186,6 +210,19 @@ class NoRegionError(BaseEndpointResolverError):
     fmt = 'You must specify a region.'
 
 
+class EndpointVariantError(BaseEndpointResolverError):
+    """
+    Could not construct modeled endpoint variant.
+
+    :ivar error_msg: The message explaining why the modeled endpoint variant
+        is unable to be constructed.
+
+    """
+
+    fmt = ('Unable to construct a modeled endpoint with the following '
+           'variant(s) {tags}: ')
+
+
 class UnknownEndpointError(BaseEndpointResolverError, ValueError):
     """
     Could not construct an endpoint.
@@ -196,6 +233,20 @@ class UnknownEndpointError(BaseEndpointResolverError, ValueError):
     fmt = (
         'Unable to construct an endpoint for '
         '{service_name} in region {region_name}')
+
+
+class UnknownFIPSEndpointError(BaseEndpointResolverError):
+    """
+    Could not construct a FIPS endpoint.
+
+    :ivar service_name: The name of the service.
+    :ivar region_name: The name of the region.
+    """
+    fmt = (
+        'The provided FIPS pseudo-region "{region_name}" is not known for '
+        'the service "{service_name}". A FIPS compliant endpoint cannot be '
+        'constructed.'
+    )
 
 
 class ProfileNotFound(BotoCoreError):
@@ -602,6 +653,10 @@ class MD5UnavailableError(BotoCoreError):
     fmt = "This system does not support MD5 generation."
 
 
+class MissingDependencyException(BotoCoreError):
+    fmt = "Missing Dependency: {msg}"
+
+
 class MetadataRetrievalError(BotoCoreError):
     fmt = "Error retrieving metadata: {error_msg}"
 
@@ -647,4 +702,25 @@ class CapacityNotAvailableError(BotoCoreError):
 class InvalidProxiesConfigError(BotoCoreError):
     fmt = (
         'Invalid configuration value(s) provided for proxies_config.'
+    )
+
+
+class InvalidDefaultsMode(BotoCoreError):
+    fmt = (
+        'Client configured with invalid defaults mode: {mode}. '
+        'Valid defaults modes include: {valid_modes}.'
+    )
+
+
+class AwsChunkedWrapperError(BotoCoreError):
+    fmt = '{error_msg}'
+
+
+class FlexibleChecksumError(BotoCoreError):
+    fmt = '{error_msg}'
+
+
+class InvalidEndpointConfigurationError(BotoCoreError):
+    fmt = (
+        'Invalid endpoint configuration: {msg}'
     )

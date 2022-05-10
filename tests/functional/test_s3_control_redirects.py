@@ -12,21 +12,20 @@
 # language governing permissions and limitations under the License.
 import re
 from contextlib import contextmanager
-from nose.tools import assert_equal, assert_true, assert_raises
-from tests import unittest, mock, BaseSessionTest, ClientHTTPStubber
+
+import pytest
 
 from botocore import exceptions
-from botocore.exceptions import (
-    UnsupportedS3ControlArnError,
-    UnsupportedS3ControlConfigurationError,
-    InvalidHostLabelError,
-    ParamValidationError,
-)
-from botocore.session import Session
 from botocore.compat import urlsplit
 from botocore.config import Config
-from botocore.awsrequest import AWSResponse
-
+from botocore.exceptions import (
+    InvalidHostLabelError,
+    ParamValidationError,
+    UnsupportedS3ControlArnError,
+    UnsupportedS3ControlConfigurationError,
+)
+from botocore.session import Session
+from tests import ClientHTTPStubber, unittest
 
 ACCESSPOINT_ARN_TEST_CASES = [
     # Outpost accesspoint arn test cases
@@ -93,24 +92,29 @@ ACCESSPOINT_ARN_TEST_CASES = [
         'region': 'us-gov-east-1-fips',
         'config': {'s3': {'use_arn_region': False}},
         'assertions': {
-            'exception': 'UnsupportedS3ControlConfigurationError',
+            'signing_name': 's3-outposts',
+            'netloc': 's3-outposts-fips.us-gov-east-1.amazonaws.com',
+            'headers': {
+                'x-amz-outpost-id': 'op-01234567890123456',
+                'x-amz-account-id': '123456789012',
+            },
         }
     },
-    #{
+    # {
     #    'arn': 'arn:aws-us-gov:s3-outposts:fips-us-gov-east-1:123456789012:outpost:op-01234567890123456:accesspoint:myaccesspoint',
     #    'region': 'fips-us-gov-east-1',
     #    'config': {'s3': {'use_arn_region': True}},
     #    'assertions': {
     #        'exception': 'UnsupportedS3ArnError',
     #    }
-    #},
+    # },
     {
         'arn': 'arn:aws-us-gov:s3-outposts:us-gov-east-1:123456789012:outpost:op-01234567890123456:accesspoint:myaccesspoint',
         'region': 'us-gov-east-1-fips',
         'config': {'s3': {'use_arn_region': True}},
         'assertions': {
             'signing_name': 's3-outposts',
-            'netloc': 's3-outposts.us-gov-east-1.amazonaws.com',
+            'netloc': 's3-outposts-fips.us-gov-east-1.amazonaws.com',
             'headers': {
                 'x-amz-outpost-id': 'op-01234567890123456',
                 'x-amz-account-id': '123456789012',
@@ -214,7 +218,12 @@ BUCKET_ARN_TEST_CASES = [
         'region': 'us-gov-east-1-fips',
         'config': {'s3': {'use_arn_region': False}},
         'assertions': {
-            'exception': 'UnsupportedS3ControlConfigurationError',
+            'signing_name': 's3-outposts',
+            'netloc': 's3-outposts-fips.us-gov-east-1.amazonaws.com',
+            'headers': {
+                'x-amz-outpost-id': 'op-01234567890123456',
+                'x-amz-account-id': '123456789012',
+            },
         }
     },
     {
@@ -222,7 +231,7 @@ BUCKET_ARN_TEST_CASES = [
         'region': 'fips-us-gov-east-1',
         'config': {'s3': {'use_arn_region': True}},
         'assertions': {
-            'exception': 'UnsupportedS3ControlConfigurationError',
+            'exception': 'UnsupportedS3ControlArnError',
         }
     },
     {
@@ -231,7 +240,7 @@ BUCKET_ARN_TEST_CASES = [
         'config': {'s3': {'use_arn_region': True}},
         'assertions': {
             'signing_name': 's3-outposts',
-            'netloc': 's3-outposts.us-gov-east-1.amazonaws.com',
+            'netloc': 's3-outposts-fips.us-gov-east-1.amazonaws.com',
             'headers': {
                 'x-amz-outpost-id': 'op-01234567890123456',
                 'x-amz-account-id': '123456789012',
@@ -283,22 +292,22 @@ def _assert_signing_name(stubber, expected_name):
     request = stubber.requests[0]
     auth_header = request.headers['Authorization'].decode('utf-8')
     actual_name = V4_AUTH_REGEX.match(auth_header).group('name')
-    assert_equal(expected_name, actual_name)
+    assert expected_name == actual_name
 
 
 def _assert_netloc(stubber, expected_netloc):
     request = stubber.requests[0]
     url_parts = urlsplit(request.url)
-    assert_equal(expected_netloc, url_parts.netloc)
+    assert expected_netloc == url_parts.netloc
 
 
 def _assert_header(stubber, key, value):
     request = stubber.requests[0]
-    assert_true(key in request.headers)
+    assert key in request.headers
     actual_value = request.headers[key]
     if isinstance(actual_value, bytes):
         actual_value = actual_value.decode('utf-8')
-    assert_equal(value, actual_value)
+    assert value == actual_value
 
 
 def _assert_headers(stubber, headers):
@@ -325,26 +334,18 @@ def _bootstrap_test_case_client(session, test_case):
     return _bootstrap_client(session, region, config=config)
 
 
-def test_accesspoint_arn_redirection():
+@pytest.mark.parametrize("test_case", ACCESSPOINT_ARN_TEST_CASES)
+def test_accesspoint_arn_redirection(test_case):
     session = _bootstrap_session()
-    for test_case in ACCESSPOINT_ARN_TEST_CASES:
-        client, stubber = _bootstrap_test_case_client(session, test_case)
-        yield _test_accesspoint_arn, test_case, client, stubber
-
-
-def _test_accesspoint_arn(test_case, client, stubber):
+    client, stubber = _bootstrap_test_case_client(session, test_case)
     with _assert_test_case(test_case, client, stubber):
         client.get_access_point_policy(Name=test_case['arn'])
 
 
-def test_bucket_arn_redirection():
+@pytest.mark.parametrize("test_case", BUCKET_ARN_TEST_CASES)
+def test_bucket_arn_redirection(test_case):
     session = _bootstrap_session()
-    for test_case in BUCKET_ARN_TEST_CASES:
-        client, stubber = _bootstrap_test_case_client(session, test_case)
-        yield _test_bucket_arn, test_case, client, stubber
-
-
-def _test_bucket_arn(test_case, client, stubber):
+    client, stubber = _bootstrap_test_case_client(session, test_case)
     with _assert_test_case(test_case, client, stubber):
         client.get_bucket(Bucket=test_case['arn'])
 
@@ -372,7 +373,7 @@ def _assert_test_case(test_case, client, stubber):
         ) % (exception_cls, type(exception_raised))
         assert isinstance(exception_raised, exception_cls), error_msg
     else:
-        assert_equal(len(stubber.requests), 1)
+        assert len(stubber.requests) == 1
         if 'signing_name' in assertions:
             _assert_signing_name(stubber, assertions['signing_name'])
         if 'headers' in assertions:

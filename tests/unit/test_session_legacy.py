@@ -12,23 +12,23 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-import botocore.config
-from tests import unittest, create_session, temporary_file
-import os
 import logging
-import tempfile
+import os
 import shutil
+import tempfile
 
-import mock
+import pytest
 
-import botocore.session
+import botocore.config
 import botocore.exceptions
-from botocore.model import ServiceModel
+import botocore.loaders
+import botocore.session
 from botocore import client
 from botocore.hooks import HierarchicalEmitter
-from botocore.waiter import WaiterModel
+from botocore.model import ServiceModel
 from botocore.paginate import PaginatorModel
-import botocore.loaders
+from botocore.waiter import WaiterModel
+from tests import create_session, mock, temporary_file, unittest
 
 
 # This is an old version of the session tests to ensure backwards compatibility
@@ -291,7 +291,7 @@ class TestBuiltinEventHandlers(BaseSessionTest):
         self.foo_called = True
 
     def tearDown(self):
-        super(TestBuiltinEventHandlers, self).setUp()
+        super(TestBuiltinEventHandlers, self).tearDown()
         self.handler_patch.stop()
 
     def test_registered_builtin_handlers(self):
@@ -659,10 +659,10 @@ class TestCreateClient(BaseSessionTest):
             self.environ['FOO_CONFIG_FILE'] = f.name
             self.session = create_session(session_vars=self.env_vars)
             f.write('[default]\n')
-            f.write('foo_api_versions =\n'
-                    '    myservice = %s\n'
-                    '    myservice2 = %s\n' % (
-                        config_api_version, second_config_api_version)
+            f.write(
+                f'foo_api_versions =\n'
+                f'    myservice = {config_api_version}\n'
+                f'    myservice2 = {second_config_api_version}\n'
             )
             f.flush()
 
@@ -704,21 +704,29 @@ class TestSessionComponent(BaseSessionTest):
         self.assertIs(
             self.session._get_internal_component('internal'), component)
         with self.assertRaises(ValueError):
-            self.session.get_component('internal')
+            # get_component has been deprecated to the public
+            with pytest.warns(DeprecationWarning):
+                self.session.get_component('internal')
 
     def test_internal_endpoint_resolver_is_same_as_deprecated_public(self):
         endpoint_resolver = self.session._get_internal_component(
             'endpoint_resolver')
-        self.assertIs(
-            self.session.get_component('endpoint_resolver'), endpoint_resolver)
+        # get_component has been deprecated to the public
+        with pytest.warns(DeprecationWarning):
+            self.assertIs(
+                self.session.get_component('endpoint_resolver'),
+                endpoint_resolver
+            )
 
     def test_internal_exceptions_factory_is_same_as_deprecated_public(self):
         exceptions_factory = self.session._get_internal_component(
             'exceptions_factory')
-        self.assertIs(
-            self.session.get_component('exceptions_factory'),
-            exceptions_factory
-        )
+        # get_component has been deprecated to the public
+        with pytest.warns(DeprecationWarning):
+            self.assertIs(
+                self.session.get_component('exceptions_factory'),
+                exceptions_factory
+            )
 
 
 class TestComponentLocator(unittest.TestCase):

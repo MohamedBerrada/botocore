@@ -11,9 +11,11 @@
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 from botocore.compat import OrderedDict
+from botocore.docs.sharedexample import (
+    SharedExampleDocumenter,
+    document_shared_examples,
+)
 from tests.unit.docs import BaseDocsTest
-from botocore.docs.sharedexample import SharedExampleDocumenter, \
-    document_shared_examples
 
 
 class TestDocumentSharedExamples(BaseDocsTest):
@@ -41,7 +43,8 @@ class TestDocumentSharedExamples(BaseDocsTest):
         })
         self.add_shape_to_params('foo', 'foo')
         self.add_shape_to_params('aloha', 'aloha')
-        self._examples = [{
+        self._examples = [
+            {
                 "id": "sample-id",
                 "title": "sample-title",
                 "description": "Sample Description.",

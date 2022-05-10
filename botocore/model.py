@@ -13,10 +13,12 @@
 """Abstractions to interact with service models."""
 from collections import defaultdict
 
-from botocore.utils import CachedProperty, instance_cache, hyphenize_service_id
 from botocore.compat import OrderedDict
-from botocore.exceptions import MissingServiceIdError
-from botocore.exceptions import UndefinedModelAttributeError
+from botocore.exceptions import (
+    MissingServiceIdError,
+    UndefinedModelAttributeError,
+)
+from botocore.utils import CachedProperty, hyphenize_service_id, instance_cache
 
 NOT_SET = object()
 
@@ -53,9 +55,9 @@ class Shape(object):
                         'xmlNamespace', 'resultWrapper', 'xmlAttribute',
                         'eventstream', 'event', 'eventheader', 'eventpayload',
                         'jsonvalue', 'timestampFormat', 'hostLabel']
-    METADATA_ATTRS = ['required', 'min', 'max', 'sensitive', 'enum',
+    METADATA_ATTRS = ['required', 'min', 'max', 'pattern', 'sensitive', 'enum',
                       'idempotencyToken', 'error', 'exception',
-                      'endpointdiscoveryid', 'retryable']
+                      'endpointdiscoveryid', 'retryable', 'document', 'union']
     MAP_TYPE = OrderedDict
 
     def __init__(self, shape_name, shape_model, shape_resolver=None):
@@ -133,10 +135,13 @@ class Shape(object):
 
             * min
             * max
+            * pattern
             * enum
             * sensitive
             * required
             * idempotencyToken
+            * document
+            * union
 
         :rtype: dict
         :return: Metadata about the shape.
@@ -175,7 +180,7 @@ class Shape(object):
 class StructureShape(Shape):
     @CachedProperty
     def members(self):
-        members = self._shape_model['members']
+        members = self._shape_model.get('members', self.MAP_TYPE())
         # The members dict looks like:
         #    'members': {
         #        'MemberName': {'shape': 'shapeName'},
@@ -204,6 +209,14 @@ class StructureShape(Shape):
             return code
         # Use the exception name if there is no explicit code modeled
         return self.name
+
+    @CachedProperty
+    def is_document_type(self):
+        return self.metadata.get('document', False)
+
+    @CachedProperty
+    def is_tagged_union(self):
+        return self.metadata.get('union', False)
 
 
 class ListShape(Shape):
@@ -373,8 +386,10 @@ class ServiceModel(object):
     def endpoint_discovery_required(self):
         for operation in self.operation_names:
             model = self.operation_model(operation)
-            if (model.endpoint_discovery is not None and
-                    model.endpoint_discovery.get('required')):
+            if (
+                model.endpoint_discovery is not None
+                and model.endpoint_discovery.get('required')
+            ):
                 return True
         return False
 
@@ -402,7 +417,6 @@ class ServiceModel(object):
 
     def __repr__(self):
         return '%s(%s)' % (self.__class__.__name__, self.service_name)
-
 
 
 class OperationModel(object):
@@ -511,9 +525,11 @@ class OperationModel(object):
         if not input_shape:
             return []
 
-        return [name for (name, shape) in input_shape.members.items()
-                if 'idempotencyToken' in shape.metadata and
-                shape.metadata['idempotencyToken']]
+        return [
+            name for (name, shape) in input_shape.members.items()
+            if 'idempotencyToken' in shape.metadata
+            and shape.metadata['idempotencyToken']
+        ]
 
     @CachedProperty
     def auth_type(self):
@@ -531,6 +547,10 @@ class OperationModel(object):
     @CachedProperty
     def http_checksum_required(self):
         return self._operation_model.get('httpChecksumRequired', False)
+
+    @CachedProperty
+    def http_checksum(self):
+        return self._operation_model.get('httpChecksum', {})
 
     @CachedProperty
     def has_event_stream_input(self):
@@ -738,7 +758,7 @@ class DenormalizedStructureBuilder(object):
         shape = self._build_initial_shape(model)
         shape['members'] = members
 
-        for name, member_model in model['members'].items():
+        for name, member_model in model.get('members', OrderedDict()).items():
             member_shape_name = self._get_shape_name(member_model)
             members[name] = {'shape': member_shape_name}
             self._build_model(member_model, shapes, member_shape_name)

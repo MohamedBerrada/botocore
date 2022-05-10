@@ -4,8 +4,7 @@ import os.path
 import re
 import sys
 
-from setuptools import setup, find_packages
-
+from setuptools import find_packages, setup
 
 here = os.path.abspath(os.path.dirname(__file__))
 
@@ -24,11 +23,14 @@ def find_version(*file_paths):
 
 
 requires = [
-    'jmespath>=0.7.1,<1.0.0',
     'python-dateutil>=2.1,<3.0.0',
     'urllib3>=1.25.4,<1.27',
 ]
-
+if sys.version_info[:2] == (3, 6):
+    # jmespath dropped support for python 3.6 in release 1.0.0
+    requires.append('jmespath>=0.7.1,<1.0.0',)
+else:
+    requires.append('jmespath>=0.7.1,<2.0.0',)
 
 setup(
     name='botocore',
@@ -44,7 +46,7 @@ setup(
     include_package_data=True,
     install_requires=requires,
     license="Apache License 2.0",
-    python_requires=">= 2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, !=3.5.*",
+    python_requires=">= 3.6",
     classifiers=[
         'Development Status :: 5 - Production/Stable',
         'Intended Audience :: Developers',
@@ -52,11 +54,11 @@ setup(
         'Natural Language :: English',
         'License :: OSI Approved :: Apache Software License',
         'Programming Language :: Python',
-        'Programming Language :: Python :: 2',
-        'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
     ],
 )

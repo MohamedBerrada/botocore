@@ -18,23 +18,23 @@ AWS provides a test suite for signature version 4:
 https://github.com/awslabs/aws-c-auth/tree/v0.3.15/tests/aws-sig-v4-test-suite
 
 This module contains logic to run these tests.  The test files were
-placed in ./aws4_testsuite, and we're using nose's test generators to
-dynamically generate testcases based on these files.
+placed in ./aws4_testsuite, and we're using those to dynamically
+generate testcases based on these files.
 
 """
-import os
-import logging
-import io
 import datetime
+import io
+import logging
+import os
 import re
-from botocore.compat import six, urlsplit, parse_qsl, HAS_CRT
 
-import mock
+import pytest
 
 import botocore.auth
 from botocore.awsrequest import AWSRequest
+from botocore.compat import parse_qsl, six, urlsplit
 from botocore.credentials import Credentials
-
+from tests import FreezeTime
 
 SECRET_KEY = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
 ACCESS_KEY = 'AKIDEXAMPLE'
@@ -80,27 +80,25 @@ class RawHTTPRequest(six.moves.BaseHTTPServer.BaseHTTPRequestHandler):
         self.error_message = message
 
 
-def test_generator():
-    datetime_patcher = mock.patch.object(
-        botocore.auth.datetime, 'datetime',
-        mock.Mock(wraps=datetime.datetime)
-    )
-    mocked_datetime = datetime_patcher.start()
-    mocked_datetime.utcnow.return_value = DATE
+def generate_test_cases():
     for (dirpath, dirnames, filenames) in os.walk(TESTSUITE_DIR):
         if not any(f.endswith('.req') for f in filenames):
             continue
 
-        test_case = os.path.relpath(dirpath, TESTSUITE_DIR)
+        test_case = os.path.relpath(dirpath, TESTSUITE_DIR).replace(
+            os.sep, '/'
+        )
         if test_case in TESTS_TO_IGNORE:
             log.debug("Skipping test: %s", test_case)
             continue
 
-        if HAS_CRT:
-            yield (_test_crt_signature_version_4, test_case)
-        else:
-            yield (_test_signature_version_4, test_case)
-    datetime_patcher.stop()
+        yield test_case
+
+
+@pytest.mark.parametrize("test_case", generate_test_cases())
+@FreezeTime(module=botocore.auth.datetime, date=DATE)
+def test_signature_version_4(test_case):
+    _test_signature_version_4(test_case)
 
 
 def create_request_from_raw_request(raw_request):
@@ -132,7 +130,7 @@ def create_request_from_raw_request(raw_request):
 
 
 def _test_signature_version_4(test_case):
-    test_case = _SignatureTestCase(test_case)
+    test_case = SignatureTestCase(test_case)
     request = create_request_from_raw_request(test_case.raw_request)
 
     auth = botocore.auth.SigV4Auth(test_case.credentials, SERVICE, REGION)
@@ -155,21 +153,6 @@ def _test_signature_version_4(test_case):
                      test_case.raw_request, 'authheader')
 
 
-def _test_crt_signature_version_4(test_case):
-    test_case = _SignatureTestCase(test_case)
-    request = create_request_from_raw_request(test_case.raw_request)
-
-    # Use CRT logging to diagnose interim steps (canonical request, etc)
-    # import awscrt.io
-    # awscrt.io.init_logging(awscrt.io.LogLevel.Trace, 'stdout')
-    auth = botocore.crt.auth.CrtSigV4Auth(test_case.credentials,
-                                          SERVICE, REGION)
-    auth.add_auth(request)
-    actual_auth_header = request.headers['Authorization']
-    assert_equal(actual_auth_header, test_case.authorization_header,
-                 test_case.raw_request, 'authheader')
-
-
 def assert_equal(actual, expected, raw_request, part):
     if actual != expected:
         message = "The %s did not match" % part
@@ -178,7 +161,7 @@ def assert_equal(actual, expected, raw_request, part):
         raise AssertionError(message)
 
 
-class _SignatureTestCase(object):
+class SignatureTestCase(object):
     def __init__(self, test_case):
         filepath = os.path.join(TESTSUITE_DIR, test_case,
                                 os.path.basename(test_case))

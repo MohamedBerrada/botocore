@@ -10,15 +10,15 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-from tests import unittest, RawResponse
 import datetime
+import itertools
 
+import pytest
 from dateutil.tz import tzutc
-from nose.tools import assert_equal
 
-from botocore import parsers
-from botocore import model
-from botocore.compat import json, MutableMapping
+from botocore import model, parsers
+from botocore.compat import MutableMapping, json
+from tests import RawResponse, unittest
 
 
 # HTTP responses will typically return a custom HTTP
@@ -376,6 +376,148 @@ class TestResponseMetadataParsed(unittest.TestCase):
         }
         self.assertEqual(parsed, expected)
 
+    def test_checksum_metadata_parsed_from_response_context(self):
+        headers = {}
+        response_dict = {
+            'status_code': 200,
+            'headers': headers,
+            'body': b'',
+            'context': {
+                'checksum': {
+                    'response_algorithm': 'crc32'
+                }
+            }
+        }
+        parser = parsers.RestXMLParser()
+        parsed = parser.parse(response_dict, None)
+        expected_algorithm = 'crc32'
+        actual_algorithm = parsed['ResponseMetadata']['ChecksumAlgorithm']
+        self.assertEqual(actual_algorithm, expected_algorithm)
+
+
+class TestTaggedUnions(unittest.TestCase):
+    def assert_tagged_union_response_with_unknown_member(self,
+                                                         parser,
+                                                         response,
+                                                         output_shape,
+                                                         expected_parsed_response,
+                                                         expected_log):
+        with self.assertLogs() as captured_log:
+            parsed = parser.parse(response, output_shape)
+            self.assertEqual(parsed, expected_parsed_response)
+            self.assertEqual(len(captured_log.records), 1)
+            self.assertIn(('Received a tagged union response with member '
+                           'unknown to client'),
+                          captured_log.records[0].getMessage())
+
+    def test_base_json_parser_handles_unknown_member(self):
+        parser = parsers.JSONParser()
+        response = b'{"Foo": "mystring"}'
+        headers = {'x-amzn-requestid': 'request-id'}
+        output_shape = model.StructureShape(
+            'OutputShape',
+            {
+                'type': 'structure',
+                'union': True,
+                'members': {
+                    'Str': {
+                        'shape': 'StringType',
+                    }
+                }
+            },
+            model.ShapeResolver({'StringType': {'type': 'string'}})
+        )
+        response = {'body': response, 'headers': headers, 'status_code': 200}
+        # Parsed response omits data from service since it is not
+        # modeled in the client
+        expected_parsed_response = {
+            'SDK_UNKNOWN_MEMBER': {
+                'name': 'Foo'
+            },
+            'ResponseMetadata':
+            {'RequestId': 'request-id',
+             'HTTPStatusCode': 200,
+             'HTTPHeaders': {
+                 'x-amzn-requestid': 'request-id'}
+             }
+        }
+        expected_log = "Received a response with an unknown member Foo set"
+        self.assert_tagged_union_response_with_unknown_member(
+            parser, response, output_shape, expected_parsed_response,
+            expected_log
+        )
+
+    def test_base_xml_parser_handles_unknown_member(self):
+        parser = parsers.QueryParser()
+        response = (
+            '<OperationNameResponse>'
+            '  <OperationNameResult><Foo>mystring</Foo></OperationNameResult>'
+            '  <ResponseMetadata>'
+            '    <RequestId>request-id</RequestId>'
+            '  </ResponseMetadata>'
+            '</OperationNameResponse>').encode('utf-8')
+        output_shape = model.StructureShape(
+            'OutputShape',
+            {
+                'type': 'structure',
+                'union': True,
+                'resultWrapper': 'OperationNameResult',
+                'members': {
+                    'Str': {
+                        'shape': 'StringType',
+                    },
+                }
+            },
+            model.ShapeResolver({
+                'StringType': {
+                    'type': 'string',
+                },
+            })
+        )
+        response = {'body': response, 'headers': {}, 'status_code': 200}
+        # Parsed response omits data from service since it is not
+        # modeled in the client
+        expected_parsed_response = {
+            'SDK_UNKNOWN_MEMBER': {
+                'name': 'Foo'
+            },
+            'ResponseMetadata': {
+                'RequestId': 'request-id',
+                'HTTPStatusCode': 200,
+                'HTTPHeaders': {}
+            }
+        }
+        expected_log = "Received a response with an unknown member Foo set"
+        self.assert_tagged_union_response_with_unknown_member(
+            parser, response, output_shape, expected_parsed_response,
+            expected_log
+        )
+
+    def test_parser_errors_out_when_multiple_members_set(self):
+        parser = parsers.JSONParser()
+        response = b'{"Foo": "mystring", "Bar": "mystring2"}'
+        headers = {'x-amzn-requestid': 'request-id'}
+        output_shape = model.StructureShape(
+            'OutputShape',
+            {
+                'type': 'structure',
+                'union': True,
+                'members': {
+                    'Foo': {
+                        'shape': 'StringType',
+                    },
+                    'Bar': {
+                        'shape': 'StringType',
+                    }
+                }
+            },
+            model.ShapeResolver({'StringType': {'type': 'string'}})
+        )
+
+        response = {'body': response, 'headers': headers, 'status_code': 200}
+        with self.assertRaises(parsers.ResponseParserError):
+            parser.parse(response, output_shape)
+
 
 class TestHeaderResponseInclusion(unittest.TestCase):
     def create_parser(self):
@@ -597,8 +739,8 @@ class TestHandlesInvalidXMLResponses(unittest.TestCase):
         parser = parsers.QueryParser()
         output_shape = None
         # The XML body should be in the error message.
-        with self.assertRaisesRegexp(parsers.ResponseParserError,
-                                     '<DeleteTagsResponse'):
+        with self.assertRaisesRegex(parsers.ResponseParserError,
+                                    '<DeleteTagsResponse'):
             parser.parse(
                 {'body': invalid_xml, 'headers': {}, 'status_code': 200},
                 output_shape)
@@ -1143,7 +1285,7 @@ class TestParseErrorResponses(unittest.TestCase):
         body = (b'{"code":"AccessDeniedException","type":"Client","message":'
                 b'"Access denied"}')
         headers = {
-             'x-amzn-requestid': 'request-id'
+            'x-amzn-requestid': 'request-id'
         }
         parser = parsers.RestJSONParser()
         parsed = parser.parse(
@@ -1160,7 +1302,7 @@ class TestParseErrorResponses(unittest.TestCase):
             "message": "blah",
             "deletes": 0}'''
         headers = {
-             'x-amzn-requestid': 'request-id'
+            'x-amzn-requestid': 'request-id'
         }
         parser = parsers.RestJSONParser()
         parsed = parser.parse(
@@ -1172,7 +1314,7 @@ class TestParseErrorResponses(unittest.TestCase):
         body = (b'{"Code":"AccessDeniedException","type":"Client","Message":'
                 b'"Access denied"}')
         headers = {
-             'x-amzn-requestid': 'request-id'
+            'x-amzn-requestid': 'request-id'
         }
         parser = parsers.RestJSONParser()
         parsed = parser.parse(
@@ -1282,7 +1424,7 @@ class TestParseErrorResponses(unittest.TestCase):
         # We should be able to handle this gracefully and still at least
         # populate a "Message" key so that consumers don't have to
         # conditionally check for this.
-        body =  (
+        body = (
             '<ErrorResponse>'
             '  <Error>'
             '    <Type>Sender</Type>'
@@ -1301,26 +1443,28 @@ class TestParseErrorResponses(unittest.TestCase):
         self.assertEqual(error['Message'], '')
 
 
-def test_can_handle_generic_error_message():
-    # There are times when you can get a service to respond with a generic
-    # html error page.  We should be able to handle this case.
-    for parser_cls in parsers.PROTOCOL_PARSERS.values():
-        generic_html_body =  (
-            '<html><body><b>Http/1.1 Service Unavailable</b></body></html>'
-        ).encode('utf-8')
-        empty_body = b''
-        none_body = None
-        yield _assert_parses_generic_error, parser_cls(), generic_html_body
-        yield _assert_parses_generic_error, parser_cls(), empty_body
-        yield _assert_parses_generic_error, parser_cls(), none_body
+def _generic_test_bodies():
+    generic_html_body = (
+        '<html><body><b>Http/1.1 Service Unavailable</b></body></html>'
+    ).encode('utf-8')
+    empty_body = b''
+    none_body = None
+
+    return [generic_html_body, empty_body, none_body]
 
 
-def _assert_parses_generic_error(parser, body):
+@pytest.mark.parametrize(
+    "parser, body",
+    itertools.product(
+        parsers.PROTOCOL_PARSERS.values(),
+        _generic_test_bodies()
+    ),
+)
+def test_can_handle_generic_error_message(parser, body):
     # There are times when you can get a service to respond with a generic
     # html error page.  We should be able to handle this case.
-    parsed = parser.parse({
-        'body': body, 'headers': {}, 'status_code': 503}, None)
-    assert_equal(
-        parsed['Error'],
-        {'Code': '503', 'Message': 'Service Unavailable'})
-    assert_equal(parsed['ResponseMetadata']['HTTPStatusCode'], 503)
+    parsed = parser().parse(
+        {'body': body, 'headers': {}, 'status_code': 503}, None
+    )
+    assert parsed['Error'] == {'Code': '503', 'Message': 'Service Unavailable'}
+    assert parsed['ResponseMetadata']['HTTPStatusCode'] == 503

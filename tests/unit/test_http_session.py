@@ -1,16 +1,25 @@
 import socket
 
-from mock import patch, Mock, ANY
-from tests import unittest
-from nose.tools import raises
-from urllib3.exceptions import NewConnectionError, ProtocolError
+import pytest
+from urllib3.exceptions import NewConnectionError, ProtocolError, ProxyError
 
-from botocore.vendored import six
-from botocore.awsrequest import AWSRequest
-from botocore.awsrequest import AWSHTTPConnectionPool, AWSHTTPSConnectionPool
-from botocore.httpsession import get_cert_path
-from botocore.httpsession import URLLib3Session, ProxyConfiguration
-from botocore.exceptions import ConnectionClosedError, EndpointConnectionError
+from botocore.awsrequest import (
+    AWSHTTPConnectionPool,
+    AWSHTTPSConnectionPool,
+    AWSRequest,
+)
+from botocore.exceptions import (
+    ConnectionClosedError,
+    EndpointConnectionError,
+    ProxyConnectionError,
+)
+from botocore.httpsession import (
+    ProxyConfiguration,
+    URLLib3Session,
+    get_cert_path,
+    mask_proxy_url,
+)
+from tests import mock, unittest
 
 
 class TestProxyConfiguration(unittest.TestCase):
@@ -57,11 +66,61 @@ class TestHttpSessionUtils(unittest.TestCase):
         self.assertEqual(path, cert_path)
 
     def test_get_cert_path_certifi_or_default(self):
-        with patch('botocore.httpsession.where') as where:
+        with mock.patch('botocore.httpsession.where') as where:
             path = '/bundle/path'
             where.return_value = path
             cert_path = get_cert_path(True)
             self.assertEqual(path, cert_path)
+
+
+@pytest.mark.parametrize(
+    'proxy_url, expected_mask_url',
+    (
+
+        (
+            'http://myproxy.amazonaws.com',
+            'http://myproxy.amazonaws.com'
+        ),
+        (
+            'http://user@myproxy.amazonaws.com',
+            'http://***@myproxy.amazonaws.com'
+        ),
+        (
+            'http://user:pass@myproxy.amazonaws.com',
+            'http://***:***@myproxy.amazonaws.com'
+        ),
+        (
+            'https://user:pass@myproxy.amazonaws.com',
+            'https://***:***@myproxy.amazonaws.com'
+        ),
+        (
+            'http://user:pass@localhost',
+            'http://***:***@localhost'
+        ),
+        (
+            'http://user:pass@localhost:80',
+            'http://***:***@localhost:80'
+        ),
+        (
+            'http://user:pass@userpass.com',
+            'http://***:***@userpass.com'
+        ),
+        (
+            'http://user:pass@192.168.1.1',
+            'http://***:***@192.168.1.1'
+        ),
+        (
+            'http://user:pass@[::1]',
+            'http://***:***@[::1]'
+        ),
+        (
+            'http://user:pass@[::1]:80',
+            'http://***:***@[::1]:80'
+        ),
+    )
+)
+def test_mask_proxy_url(proxy_url, expected_mask_url):
+    assert mask_proxy_url(proxy_url) == expected_mask_url
 
 
 class TestURLLib3Session(unittest.TestCase):
@@ -73,17 +132,17 @@ class TestURLLib3Session(unittest.TestCase):
             data=b'',
         )
 
-        self.response = Mock()
+        self.response = mock.Mock()
         self.response.headers = {}
         self.response.stream.return_value = b''
 
-        self.pool_manager = Mock()
-        self.connection = Mock()
+        self.pool_manager = mock.Mock()
+        self.connection = mock.Mock()
         self.connection.urlopen.return_value = self.response
         self.pool_manager.connection_from_url.return_value = self.connection
 
-        self.pool_patch = patch('botocore.httpsession.PoolManager')
-        self.proxy_patch = patch('botocore.httpsession.proxy_from_url')
+        self.pool_patch = mock.patch('botocore.httpsession.PoolManager')
+        self.proxy_patch = mock.patch('botocore.httpsession.proxy_from_url')
         self.pool_manager_cls = self.pool_patch.start()
         self.proxy_manager_fun = self.proxy_patch.start()
         self.pool_manager_cls.return_value = self.pool_manager
@@ -102,7 +161,7 @@ class TestURLLib3Session(unittest.TestCase):
             url=url,
             body=body,
             headers=headers,
-            retries=ANY,
+            retries=mock.ANY,
             assert_same_host=False,
             preload_content=False,
             decode_content=False,
@@ -112,9 +171,9 @@ class TestURLLib3Session(unittest.TestCase):
     def _assert_manager_call(self, manager, *assert_args, **assert_kwargs):
         call_kwargs = {
             'strict': True,
-            'maxsize': ANY,
-            'timeout': ANY,
-            'ssl_context': ANY,
+            'maxsize': mock.ANY,
+            'timeout': mock.ANY,
+            'ssl_context': mock.ANY,
             'socket_options': [],
             'cert_file': None,
             'key_file': None,
@@ -149,7 +208,7 @@ class TestURLLib3Session(unittest.TestCase):
             'proxy_use_forwarding_for_https': False,
         }
         use_forwarding = proxies_config['proxy_use_forwarding_for_https']
-        with patch('botocore.httpsession.create_urllib3_context'):
+        with mock.patch('botocore.httpsession.create_urllib3_context'):
             session = URLLib3Session(
                 proxies=proxies,
                 proxies_config=proxies_config
@@ -159,7 +218,7 @@ class TestURLLib3Session(unittest.TestCase):
             self.assert_proxy_manager_call(
                 proxies['http'],
                 proxy_headers={},
-                proxy_ssl_context=ANY,
+                proxy_ssl_context=mock.ANY,
                 use_forwarding_for_https=use_forwarding
             )
         self.assert_request_sent(url=self.request.url)
@@ -236,7 +295,7 @@ class TestURLLib3Session(unittest.TestCase):
 
     def test_https_proxy_scheme_forwarding_https_url(self):
         proxies = {'https': 'https://proxy.com'}
-        proxies_config = {"proxy_use_forwarding_for_https":  True}
+        proxies_config = {"proxy_use_forwarding_for_https": True}
         session = URLLib3Session(proxies=proxies, proxies_config=proxies_config)
         self.request.url = 'https://example.com/'
         session.send(self.request.prepare())
@@ -278,7 +337,7 @@ class TestURLLib3Session(unittest.TestCase):
         cert = ('/some/cert', '/some/key')
         proxies = {'https': 'https://proxy.com'}
         proxies_config = {'proxy_client_cert': "path/to/cert"}
-        with patch('botocore.httpsession.create_urllib3_context'):
+        with mock.patch('botocore.httpsession.create_urllib3_context'):
             session = URLLib3Session(
                 proxies=proxies, client_cert=cert,
                 proxies_config=proxies_config
@@ -290,7 +349,7 @@ class TestURLLib3Session(unittest.TestCase):
                 proxy_headers={},
                 cert_file=cert[0],
                 key_file=cert[1],
-                proxy_ssl_context=ANY
+                proxy_ssl_context=mock.ANY
             )
             self.assert_request_sent()
 
@@ -298,7 +357,7 @@ class TestURLLib3Session(unittest.TestCase):
         cert = ('/some/cert', '/some/key')
         proxies = {'https': 'https://proxy.com'}
         proxies_config = {'proxy_client_cert': "path/to/cert"}
-        with patch('botocore.httpsession.create_urllib3_context'):
+        with mock.patch('botocore.httpsession.create_urllib3_context'):
             session = URLLib3Session(
                 proxies=proxies, client_cert=cert,
                 proxies_config=proxies_config
@@ -307,6 +366,28 @@ class TestURLLib3Session(unittest.TestCase):
             session.send(self.request.prepare())
             last_call = self.proxy_manager_fun.call_args[-1]
             self.assertIs(last_call['ssl_context'].check_hostname, True)
+
+    def test_proxy_ssl_context_does_not_use_check_hostname_if_ip_address(self):
+        cert = ('/some/cert', '/some/key')
+        proxies_config = {'proxy_client_cert': "path/to/cert"}
+        urls = ['https://1.2.3.4:5678',
+                'https://4.6.0.0',
+                'https://[FE80::8939:7684:D84b:a5A4%251]:1234',
+                'https://[FE80::8939:7684:D84b:a5A4%251]',
+                'https://[FE80::8939:7684:D84b:a5A4]:999',
+                'https://[FE80::8939:7684:D84b:a5A4]',
+                'https://[::1]:789']
+        for proxy_url in urls:
+            with mock.patch('botocore.httpsession.SSLContext'):
+                proxies = {'https': proxy_url}
+                session = URLLib3Session(
+                    proxies=proxies, client_cert=cert,
+                    proxies_config=proxies_config
+                )
+                self.request.url = 'https://example.com/'
+                session.send(self.request.prepare())
+                last_call = self.proxy_manager_fun.call_args[-1]
+                self.assertIs(last_call['ssl_context'].check_hostname, False)
 
     def test_basic_request(self):
         session = URLLib3Session()
@@ -390,18 +471,26 @@ class TestURLLib3Session(unittest.TestCase):
         session = URLLib3Session()
         session.send(self.request.prepare())
 
-    @raises(EndpointConnectionError)
     def test_catches_new_connection_error(self):
         error = NewConnectionError(None, None)
-        self.make_request_with_error(error)
+        with pytest.raises(EndpointConnectionError):
+            self.make_request_with_error(error)
 
-    @raises(ConnectionClosedError)
     def test_catches_bad_status_line(self):
         error = ProtocolError(None)
-        self.make_request_with_error(error)
+        with pytest.raises(ConnectionClosedError):
+            self.make_request_with_error(error)
+
+    def test_catches_proxy_error(self):
+        self.connection.urlopen.side_effect = ProxyError('test', None)
+        session = URLLib3Session(proxies={'http': 'http://user:pass@proxy.com'})
+        with pytest.raises(ProxyConnectionError) as e:
+            session.send(self.request.prepare())
+        assert 'user:pass' not in str(e.value)
+        assert 'http://***:***@proxy.com' in str(e.value)
 
     def test_aws_connection_classes_are_used(self):
-        session = URLLib3Session()
+        session = URLLib3Session() # noqa
         # ensure the pool manager is using the correct classes
         http_class = self.pool_manager.pool_classes_by_scheme.get('http')
         self.assertIs(http_class, AWSHTTPConnectionPool)

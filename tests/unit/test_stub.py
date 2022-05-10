@@ -10,14 +10,11 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-
-from tests import unittest
-import mock
-
-from botocore.stub import Stubber
-from botocore.exceptions import ParamValidationError, StubResponseError, UnStubbedResponseError
-from botocore.model import ServiceModel
 from botocore import hooks
+from botocore.exceptions import ParamValidationError, UnStubbedResponseError
+from botocore.model import ServiceModel
+from botocore.stub import Stubber
+from tests import mock, unittest
 
 
 class TestStubber(unittest.TestCase):
@@ -191,6 +188,20 @@ class TestStubber(unittest.TestCase):
         self.assertIn('RequestId', actual_response_meta)
         self.assertEqual(actual_response_meta['RequestId'], "79104EXAMPLEB723")
 
+    def test_get_client_error_with_modeled_fields(self):
+        error_code = 'foo'
+        error_message = 'bar'
+        modeled_fields = {
+            'Extra': 'foobar'
+        }
+        self.stubber.add_client_error(
+            'foo', error_code, error_message,
+            http_status_code=301,
+            modeled_fields=modeled_fields)
+        with self.stubber:
+            response = self.emit_get_response_event()
+        self.assertIn('Extra', response[1])
+        self.assertEqual(response[1]['Extra'], 'foobar')
 
     def test_get_response_errors_with_no_stubs(self):
         self.stubber.activate()

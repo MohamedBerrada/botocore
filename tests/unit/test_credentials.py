@@ -11,36 +11,44 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-from datetime import datetime, timedelta
-import subprocess
-import mock
 import os
-import tempfile
 import shutil
-import json
-import copy
+import subprocess
+import tempfile
+from datetime import datetime, timedelta
+from pathlib import Path
 
+import pytest
 from dateutil.tz import tzlocal, tzutc
 
-from botocore import credentials
-from botocore.utils import ContainerMetadataFetcher
-from botocore.compat import json, six
-from botocore.session import Session
-from botocore.stub import Stubber
-from botocore.utils import datetime2timestamp
-from botocore.utils import FileWebIdentityTokenLoader, SSOTokenLoader
-from botocore.credentials import EnvProvider, create_assume_role_refresher
-from botocore.credentials import CredentialProvider, AssumeRoleProvider
-from botocore.credentials import ConfigProvider, SharedCredentialProvider
-from botocore.credentials import ProcessProvider
-from botocore.credentials import AssumeRoleWithWebIdentityProvider
-from botocore.credentials import Credentials, ProfileProviderBuilder
-from botocore.credentials import SSOCredentialFetcher, SSOProvider
-from botocore.configprovider import ConfigValueStore
 import botocore.exceptions
 import botocore.session
-from tests import unittest, BaseEnvVar, IntegerRefresher, skip_if_windows
-
+from botocore import credentials
+from botocore.compat import json, six
+from botocore.configprovider import ConfigValueStore
+from botocore.credentials import (
+    AssumeRoleProvider,
+    AssumeRoleWithWebIdentityProvider,
+    ConfigProvider,
+    CredentialProvider,
+    Credentials,
+    EnvProvider,
+    ProcessProvider,
+    ProfileProviderBuilder,
+    SharedCredentialProvider,
+    SSOCredentialFetcher,
+    SSOProvider,
+    create_assume_role_refresher,
+)
+from botocore.session import Session
+from botocore.stub import Stubber
+from botocore.utils import (
+    ContainerMetadataFetcher,
+    FileWebIdentityTokenLoader,
+    SSOTokenLoader,
+    datetime2timestamp,
+)
+from tests import BaseEnvVar, IntegerRefresher, mock, skip_if_windows, unittest
 
 # Passed to session to keep it from finding default config file
 TESTENVVARS = {'config_file': (None, 'AWS_CONFIG_FILE', None)}
@@ -1083,7 +1091,7 @@ class TestEnvVar(BaseEnvVar):
             "Credentials were refreshed, but the refreshed credentials are "
             "still expired."
         )
-        with self.assertRaisesRegexp(RuntimeError, error_message):
+        with self.assertRaisesRegex(RuntimeError, error_message):
             creds.get_frozen_credentials()
 
     def test_partial_creds_is_an_error(self):
@@ -1149,7 +1157,7 @@ class TestEnvVar(BaseEnvVar):
             "Credentials were refreshed, but the refreshed credentials are "
             "still expired."
         )
-        with self.assertRaisesRegexp(RuntimeError, error_message):
+        with self.assertRaisesRegex(RuntimeError, error_message):
             creds.get_frozen_credentials()
 
         # Now we update the environment with non-expired credentials,
@@ -2666,6 +2674,29 @@ class TestJSONCache(unittest.TestCase):
         self.cache['mykey'] = {'baz': 'newvalue'}
         self.assertEqual(self.cache['mykey'], {'baz': 'newvalue'})
 
+    def test_can_delete_existing_values(self):
+        key_path = Path(os.path.join(self.tempdir, 'deleteme.json'))
+        self.cache['deleteme'] = {'foo': 'bar'}
+        assert self.cache['deleteme'] == {'foo': 'bar'}
+        assert key_path.exists()
+
+        del self.cache['deleteme']
+        # Validate key removed
+        with pytest.raises(KeyError):
+            self.cache['deleteme']
+        # Validate file removed
+        assert not key_path.exists()
+
+        self.cache['deleteme'] = {'bar': 'baz'}
+        assert self.cache['deleteme'] == {'bar': 'baz'}
+
+    def test_can_delete_missing_values(self):
+        key_path = Path(os.path.join(self.tempdir, 'deleteme.json'))
+        assert not key_path.exists()
+
+        with pytest.raises(KeyError):
+            del self.cache['deleteme']
+
     def test_can_add_multiple_keys(self):
         self.cache['mykey'] = {'foo': 'bar'}
         self.cache['mykey2'] = {'baz': 'qux'}
@@ -2696,10 +2727,13 @@ class TestJSONCache(unittest.TestCase):
         self.assertEqual(os.stat(filename).st_mode & 0xFFF, 0o600)
 
     def test_cache_with_custom_dumps_func(self):
+
         def _custom_serializer(obj):
             return "custom foo"
+
         def _custom_dumps(obj):
             return json.dumps(obj, default=_custom_serializer)
+
         custom_dir = os.path.join(self.tempdir, 'custom')
         custom_cache = credentials.JSONFileCache(
             custom_dir,
@@ -2762,7 +2796,7 @@ class TestRefreshLogic(unittest.TestCase):
             mandatory_refresh=7,
             refresh_function=fail_refresh
         )
-        with self.assertRaisesRegexp(Exception, 'refresh failed'):
+        with self.assertRaisesRegex(Exception, 'refresh failed'):
             creds.get_frozen_credentials()
 
     def test_exception_propogated_on_expired_credentials(self):
@@ -2775,7 +2809,7 @@ class TestRefreshLogic(unittest.TestCase):
             mandatory_refresh=7,
             refresh_function=fail_refresh
         )
-        with self.assertRaisesRegexp(Exception, 'refresh failed'):
+        with self.assertRaisesRegex(Exception, 'refresh failed'):
             # Because credentials are actually expired, any
             # failure to refresh should be propagated.
             creds.get_frozen_credentials()
@@ -2796,7 +2830,7 @@ class TestRefreshLogic(unittest.TestCase):
             creds_last_for=-2,
         )
         err_msg = 'refreshed credentials are still expired'
-        with self.assertRaisesRegexp(RuntimeError, err_msg):
+        with self.assertRaisesRegex(RuntimeError, err_msg):
             # Because credentials are actually expired, any
             # failure to refresh should be propagated.
             creds.get_frozen_credentials()
@@ -2876,15 +2910,14 @@ class TestContainerProvider(BaseEnvVar):
             'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI': '/latest/credentials?id=foo'
         }
         fetcher = mock.Mock(spec=credentials.ContainerMetadataFetcher)
-        timeobj = datetime.now(tzlocal())
-        expired_timestamp = (timeobj - timedelta(hours=23)).isoformat()
-        future_timestamp = (timeobj + timedelta(hours=1)).isoformat()
         exception = botocore.exceptions.CredentialRetrievalError
-        fetcher.retrieve_full_uri.side_effect = exception(provider='ecs-role',
-                                                     error_msg='fake http error')
+        fetcher.retrieve_full_uri.side_effect = exception(
+            provider='ecs-role', error_msg='fake http error'
+        )
+        provider = credentials.ContainerProvider(environ, fetcher)
+
         with self.assertRaises(exception):
-            provider = credentials.ContainerProvider(environ, fetcher)
-            creds = provider.load()
+            provider.load()
 
     def test_http_error_propagated_on_refresh(self):
         # We should ensure errors are still propagated even in the
@@ -2911,7 +2944,7 @@ class TestContainerProvider(BaseEnvVar):
         creds = provider.load()
         # Second time with a refresh should propagate an error.
         with self.assertRaises(raised_exception):
-            frozen_creds = creds.get_frozen_credentials()
+            creds.get_frozen_credentials()
 
     def test_can_use_full_url(self):
         environ = {
@@ -2971,8 +3004,9 @@ class TestProcessProvider(BaseEnvVar):
                                     spec=subprocess.Popen)
 
     def create_process_provider(self, profile_name='default'):
-        provider = ProcessProvider(profile_name, self.load_config,
-                                               popen=self.popen_mock)
+        provider = ProcessProvider(
+            profile_name, self.load_config, popen=self.popen_mock
+        )
         return provider
 
     def _get_output(self, stdout, stderr=''):
@@ -3084,7 +3118,7 @@ class TestProcessProvider(BaseEnvVar):
 
         provider = self.create_process_provider()
         exception = botocore.exceptions.CredentialRetrievalError
-        with self.assertRaisesRegexp(exception, 'Error Message'):
+        with self.assertRaisesRegex(exception, 'Error Message'):
             provider.load()
 
     def test_unsupported_version_raises_mismatch(self):
@@ -3102,7 +3136,7 @@ class TestProcessProvider(BaseEnvVar):
 
         provider = self.create_process_provider()
         exception = botocore.exceptions.CredentialRetrievalError
-        with self.assertRaisesRegexp(exception, 'Unsupported version'):
+        with self.assertRaisesRegex(exception, 'Unsupported version'):
             provider.load()
 
     def test_missing_version_in_payload_returned_raises_exception(self):
@@ -3119,7 +3153,7 @@ class TestProcessProvider(BaseEnvVar):
 
         provider = self.create_process_provider()
         exception = botocore.exceptions.CredentialRetrievalError
-        with self.assertRaisesRegexp(exception, 'Unsupported version'):
+        with self.assertRaisesRegex(exception, 'Unsupported version'):
             provider.load()
 
     def test_missing_access_key_raises_exception(self):
@@ -3136,7 +3170,7 @@ class TestProcessProvider(BaseEnvVar):
 
         provider = self.create_process_provider()
         exception = botocore.exceptions.CredentialRetrievalError
-        with self.assertRaisesRegexp(exception, 'Missing required key'):
+        with self.assertRaisesRegex(exception, 'Missing required key'):
             provider.load()
 
     def test_missing_secret_key_raises_exception(self):
@@ -3153,7 +3187,7 @@ class TestProcessProvider(BaseEnvVar):
 
         provider = self.create_process_provider()
         exception = botocore.exceptions.CredentialRetrievalError
-        with self.assertRaisesRegexp(exception, 'Missing required key'):
+        with self.assertRaisesRegex(exception, 'Missing required key'):
             provider.load()
 
     def test_missing_session_token(self):
@@ -3313,7 +3347,7 @@ class TestSSOCredentialFetcher(unittest.TestCase):
         )
         with self.assertRaises(botocore.exceptions.UnauthorizedSSOTokenError):
             with self.stubber:
-                credentials = self.fetcher.fetch_credentials()
+                self.fetcher.fetch_credentials()
 
 
 class TestSSOProvider(unittest.TestCase):
@@ -3336,7 +3370,7 @@ class TestSSOProvider(unittest.TestCase):
             'sso_role_name': self.role_name,
             'sso_account_id': self.account_id,
         }
-        self.expires_at =  datetime.now(tzlocal()) + timedelta(hours=24)
+        self.expires_at = datetime.now(tzutc()) + timedelta(hours=24)
         self.cached_creds_key = '048db75bbe50955c16af7aba6ff9c41a3131bb7e'
         self.cached_token_key = '13f9d35043871d073ab260e020f0ffde092cb14b'
         self.cache = {

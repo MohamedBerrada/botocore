@@ -1,11 +1,6 @@
-from tests import unittest
-
-import mock
-from nose.tools import assert_equal, assert_is_instance
-
-from botocore.compat import six
 from botocore.awsrequest import AWSResponse
-from botocore.retries import standard, special
+from botocore.retries import special, standard
+from tests import mock, unittest
 
 
 def create_fake_op_model(service_name):

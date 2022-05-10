@@ -10,29 +10,33 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-import mock
 import datetime
 import json
 
 from dateutil.tz import tzutc
 
 import botocore
-import botocore.session
 import botocore.auth
 import botocore.awsrequest
+import botocore.session
 from botocore.config import Config
-from botocore.credentials import Credentials
-from botocore.credentials import ReadOnlyCredentials
+from botocore.credentials import Credentials, ReadOnlyCredentials
+from botocore.exceptions import (
+    NoRegionError,
+    ParamValidationError,
+    UnknownClientMethodError,
+    UnknownSignatureVersionError,
+    UnsupportedSignatureVersionError,
+)
 from botocore.hooks import HierarchicalEmitter
 from botocore.model import ServiceId
-from botocore.exceptions import NoRegionError, UnknownSignatureVersionError
-from botocore.exceptions import UnknownClientMethodError, ParamValidationError
-from botocore.exceptions import UnsupportedSignatureVersionError
-from botocore.signers import RequestSigner, S3PostPresigner, CloudFrontSigner
-from botocore.signers import generate_db_auth_token
-
-from tests import unittest
-from tests import assert_url_equal
+from botocore.signers import (
+    CloudFrontSigner,
+    RequestSigner,
+    S3PostPresigner,
+    generate_db_auth_token,
+)
+from tests import assert_url_equal, mock, unittest
 
 
 class BaseSignerTest(unittest.TestCase):
@@ -322,10 +326,8 @@ class TestSigner(BaseSignerTest):
             ServiceId('service_name'), 'region_name', 'signing_name',
             'v4', self.credentials, self.emitter)
         auth_cls = mock.Mock()
-        with mock.patch.dict(botocore.auth.AUTH_TYPE_MAPS,
-                             {'v4': auth_cls}):
-            auth = self.signer.get_auth_instance(
-                'service_name', 'region_name', 'v4')
+        with mock.patch.dict(botocore.auth.AUTH_TYPE_MAPS, {'v4': auth_cls}):
+            self.signer.get_auth_instance('service_name', 'region_name', 'v4')
             auth_cls.assert_called_with(
                 service_name='service_name',
                 region_name='region_name',
@@ -1004,4 +1006,3 @@ class TestGenerateDBAuthToken(BaseSignerTest):
         self.assertIn(region, result)
         # The hostname won't be changed even if a different region is specified
         self.assertIn(hostname, result)
-
