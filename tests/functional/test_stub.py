@@ -10,19 +10,22 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-import botocore.config
-from tests import unittest
-
 import botocore
+import botocore.client
+import botocore.config
+import botocore.retryhandler
 import botocore.session
 import botocore.stub as stub
-from botocore.stub import Stubber
-from botocore.exceptions import StubResponseError, ClientError, \
-    StubAssertionError, UnStubbedResponseError
-from botocore.exceptions import ParamValidationError
-import botocore.client
-import botocore.retryhandler
 import botocore.translate
+from botocore.exceptions import (
+    ClientError,
+    ParamValidationError,
+    StubAssertionError,
+    StubResponseError,
+    UnStubbedResponseError,
+)
+from botocore.stub import Stubber
+from tests import unittest
 
 
 class TestStubber(unittest.TestCase):
@@ -54,8 +57,8 @@ class TestStubber(unittest.TestCase):
     def test_activated_stubber_errors_with_no_registered_stubs(self):
         self.stubber.activate()
         # Params one per line for readability.
-        with self.assertRaisesRegexp(UnStubbedResponseError,
-                                     "Unexpected API Call"):
+        with self.assertRaisesRegex(UnStubbedResponseError,
+                                    "Unexpected API Call"):
             self.client.list_objects(
                 Bucket='asdfasdfasdfasdf',
                 Delimiter='asdfasdfasdfasdf',
@@ -79,6 +82,59 @@ class TestStubber(unittest.TestCase):
 
         with self.assertRaises(ClientError):
             self.client.list_objects(Bucket='foo')
+
+    def test_modeled_client_error_response(self):
+        error_code = "InvalidObjectState"
+        error_message = "Object is in invalid state"
+        modeled_fields = {
+            'StorageClass': 'foo',
+            'AccessTier': 'bar',
+        }
+        self.stubber.add_client_error(
+            'get_object',
+            error_code,
+            error_message,
+            modeled_fields=modeled_fields,
+        )
+        self.stubber.activate()
+
+        actual_exception = None
+        try:
+            self.client.get_object(Bucket='foo', Key='bar')
+        except self.client.exceptions.InvalidObjectState as e:
+            actual_exception = e
+        self.assertIsNotNone(actual_exception)
+        response = actual_exception.response
+        self.assertEqual(response['StorageClass'], 'foo')
+        self.assertEqual(response['AccessTier'], 'bar')
+
+    def test_modeled_client_error_response_validation_error(self):
+        error_code = "InvalidObjectState"
+        error_message = "Object is in invalid state"
+        modeled_fields = {
+            'BadField': 'fail please',
+        }
+        with self.assertRaises(ParamValidationError):
+            self.stubber.add_client_error(
+                'get_object',
+                error_code,
+                error_message,
+                modeled_fields=modeled_fields,
+            )
+
+    def test_modeled_client_unknown_code_validation_error(self):
+        error_code = "NotARealError"
+        error_message = "Message"
+        modeled_fields = {
+            'BadField': 'fail please',
+        }
+        with self.assertRaises(ParamValidationError):
+            self.stubber.add_client_error(
+                'get_object',
+                error_code,
+                error_message,
+                modeled_fields=modeled_fields,
+            )
 
     def test_can_add_expected_params_to_client_error(self):
         self.stubber.add_client_error(
@@ -119,8 +175,8 @@ class TestStubber(unittest.TestCase):
             'list_objects', service_response, expected_params)
         self.stubber.activate()
         # This should call should raise an for mismatching expected params.
-        with self.assertRaisesRegexp(StubResponseError,
-                                     "{'Bucket': 'bar'},\n"):
+        with self.assertRaisesRegex(StubResponseError,
+                                    "{'Bucket': 'bar'},\n"):
             self.client.list_objects(Bucket='foo')
 
     def test_expected_params_mixed_with_errors_responses(self):
@@ -143,7 +199,7 @@ class TestStubber(unittest.TestCase):
             self.client.list_objects(Bucket='foo')
 
         # The second call should throw an error for unexpected parameters
-        with self.assertRaisesRegexp(StubResponseError, 'Expected parameters'):
+        with self.assertRaisesRegex(StubResponseError, 'Expected parameters'):
             self.client.list_objects(Bucket='foo')
 
     def test_can_continue_to_call_after_expected_params_fail(self):
@@ -309,7 +365,8 @@ class TestStubber(unittest.TestCase):
                 }
             )
             self.assertEqual(
-                    url, 'https://s3.amazonaws.com/myotherbucket/myotherkey')
+                url, 'https://s3.amazonaws.com/myotherbucket/myotherkey'
+            )
             actual_response = self.client.list_objects(**expected_params)
             self.assertEqual(desired_response, actual_response)
         self.stubber.assert_no_pending_responses()
@@ -326,8 +383,7 @@ class TestStubber(unittest.TestCase):
 
     def test_parse_get_bucket_location_returns_response(self):
         service_response = {"LocationConstraint": "us-west-2"}
-        self.stubber.add_response('get_bucket_location',service_response)
+        self.stubber.add_response('get_bucket_location', service_response)
         self.stubber.activate()
         response = self.client.get_bucket_location(Bucket='foo')
         self.assertEqual(response, service_response)
-

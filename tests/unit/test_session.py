@@ -12,25 +12,24 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-import botocore.config
-from tests import unittest, create_session, temporary_file, requires_crt
-import os
 import logging
-import tempfile
+import os
 import shutil
+import tempfile
 
-import mock
+import pytest
 
-import botocore.session
+import botocore.config
 import botocore.exceptions
-from botocore import UNSIGNED
-from botocore.model import ServiceModel
-from botocore import client
-from botocore.hooks import HierarchicalEmitter
-from botocore.waiter import WaiterModel
-from botocore.paginate import PaginatorModel
-from botocore.configprovider import ConfigChainFactory
 import botocore.loaders
+import botocore.session
+from botocore import UNSIGNED, client
+from botocore.configprovider import ConfigChainFactory
+from botocore.hooks import HierarchicalEmitter
+from botocore.model import ServiceModel
+from botocore.paginate import PaginatorModel
+from botocore.waiter import WaiterModel
+from tests import create_session, mock, requires_crt, temporary_file, unittest
 
 
 class BaseSessionTest(unittest.TestCase):
@@ -307,7 +306,7 @@ class TestBuiltinEventHandlers(BaseSessionTest):
         self.foo_called = True
 
     def tearDown(self):
-        super(TestBuiltinEventHandlers, self).setUp()
+        super(TestBuiltinEventHandlers, self).tearDown()
         self.handler_patch.stop()
 
     def test_registered_builtin_handlers(self):
@@ -378,6 +377,22 @@ class TestSessionPartitionFiles(BaseSessionTest):
     def test_provides_empty_list_for_unknown_service_regions(self):
         regions = self.session.get_available_regions('__foo__')
         self.assertEqual([], regions)
+
+    def test_provides_correct_partition_for_region(self):
+        partition = self.session.get_partition_for_region('us-west-2')
+        self.assertEqual(partition, 'aws')
+
+    def test_provides_correct_partition_for_region_regex(self):
+        partition = self.session.get_partition_for_region('af-south-99')
+        self.assertEqual(partition, 'aws')
+
+    def test_provides_correct_partition_for_region_non_default(self):
+        partition = self.session.get_partition_for_region('cn-north-1')
+        self.assertEqual(partition, 'aws-cn')
+
+    def test_raises_exception_for_invalid_region(self):
+        with self.assertRaises(botocore.exceptions.UnknownRegionError):
+            self.session.get_partition_for_region('no-good-1')
 
 
 class TestSessionUserAgent(BaseSessionTest):
@@ -675,10 +690,10 @@ class TestCreateClient(BaseSessionTest):
             del self.environ['FOO_PROFILE']
             self.environ['FOO_CONFIG_FILE'] = f.name
             f.write('[default]\n')
-            f.write('foo_api_versions =\n'
-                    '    myservice = %s\n'
-                    '    myservice2 = %s\n' % (
-                        config_api_version, second_config_api_version)
+            f.write(
+                f'foo_api_versions =\n'
+                f'    myservice = {config_api_version}\n'
+                f'    myservice2 = {second_config_api_version}\n'
             )
             f.flush()
 
@@ -711,6 +726,33 @@ class TestCreateClient(BaseSessionTest):
                 create_client.call_args[1]
             self.assertEqual(call_kwargs['api_version'], override_api_version)
 
+    @mock.patch('botocore.client.ClientCreator')
+    def test_defaults_mode_resolved_from_config_store(self, client_creator):
+        config_store = self.session.get_component('config_store')
+        config_store.set_config_variable('defaults_mode', 'standard')
+        self.session.create_client('sts', 'us-west-2')
+        self.assertIsNot(client_creator.call_args[0][-1], config_store)
+
+    @mock.patch('botocore.client.ClientCreator')
+    def test_defaults_mode_resolved_from_client_config(self, client_creator):
+        config_store = self.session.get_component('config_store')
+        config = botocore.config.Config(defaults_mode='standard')
+        self.session.create_client('sts', 'us-west-2', config=config)
+        self.assertIsNot(client_creator.call_args[0][-1], config_store)
+
+    @mock.patch('botocore.client.ClientCreator')
+    def test_defaults_mode_resolved_invalid_mode_exception(self,
+                                                           client_creator):
+        with self.assertRaises(botocore.exceptions.InvalidDefaultsMode):
+            config = botocore.config.Config(defaults_mode='foo')
+            self.session.create_client('sts', 'us-west-2', config=config)
+
+    @mock.patch('botocore.client.ClientCreator')
+    def test_defaults_mode_resolved_legacy(self, client_creator):
+        config_store = self.session.get_component('config_store')
+        self.session.create_client('sts', 'us-west-2')
+        self.assertIs(client_creator.call_args[0][-1], config_store)
+
 
 class TestSessionComponent(BaseSessionTest):
     def test_internal_component(self):
@@ -719,21 +761,29 @@ class TestSessionComponent(BaseSessionTest):
         self.assertIs(
             self.session._get_internal_component('internal'), component)
         with self.assertRaises(ValueError):
-            self.session.get_component('internal')
+            # get_component has been deprecated to the public
+            with pytest.warns(DeprecationWarning):
+                self.session.get_component('internal')
 
     def test_internal_endpoint_resolver_is_same_as_deprecated_public(self):
         endpoint_resolver = self.session._get_internal_component(
             'endpoint_resolver')
-        self.assertIs(
-            self.session.get_component('endpoint_resolver'), endpoint_resolver)
+        # get_component has been deprecated to the public
+        with pytest.warns(DeprecationWarning):
+            self.assertIs(
+                self.session.get_component('endpoint_resolver'),
+                endpoint_resolver
+            )
 
     def test_internal_exceptions_factory_is_same_as_deprecated_public(self):
         exceptions_factory = self.session._get_internal_component(
             'exceptions_factory')
-        self.assertIs(
-            self.session.get_component('exceptions_factory'),
-            exceptions_factory
-        )
+        # get_component has been deprecated to the public
+        with pytest.warns(DeprecationWarning):
+            self.assertIs(
+                self.session.get_component('exceptions_factory'),
+                exceptions_factory
+            )
 
 
 class TestClientMonitoring(BaseSessionTest):
@@ -745,9 +795,10 @@ class TestClientMonitoring(BaseSessionTest):
             client.meta.events)
 
     def assert_monitoring_host_and_port(self, session, host, port):
-        with mock.patch('botocore.monitoring.SocketPublisher',
-                        spec=True) as mock_publisher:
-            client = session.create_client('ec2', 'us-west-2')
+        with mock.patch(
+            'botocore.monitoring.SocketPublisher', spec=True
+        ) as mock_publisher:
+            session.create_client('ec2', 'us-west-2')
         self.assertEqual(mock_publisher.call_count, 1)
         _, args, kwargs = mock_publisher.mock_calls[0]
         self.assertEqual(kwargs.get('host'), host)
@@ -879,16 +930,16 @@ class TestSessionRegionSetup(BaseSessionTest):
     def test_new_session_with_valid_region(self):
         s3_client = self.session.create_client('s3', 'us-west-2')
         self.assertIsInstance(s3_client, client.BaseClient)
-        self.assertEquals(s3_client.meta.region_name, 'us-west-2')
+        self.assertEqual(s3_client.meta.region_name, 'us-west-2')
 
     def test_new_session_with_unknown_region(self):
         s3_client = self.session.create_client('s3', 'MyCustomRegion1')
         self.assertIsInstance(s3_client, client.BaseClient)
-        self.assertEquals(s3_client.meta.region_name, 'MyCustomRegion1')
+        self.assertEqual(s3_client.meta.region_name, 'MyCustomRegion1')
 
     def test_new_session_with_invalid_region(self):
         with self.assertRaises(botocore.exceptions.InvalidRegionError):
-            s3_client = self.session.create_client('s3', 'not.a.real#region')
+            self.session.create_client('s3', 'not.a.real#region')
 
     def test_new_session_with_none_region(self):
         s3_client = self.session.create_client('s3', region_name=None)

@@ -10,13 +10,8 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-import mock
-from contextlib import contextmanager
-
-import botocore.session
-from tests import BaseSessionTest, ClientHTTPStubber
 from botocore.stub import Stubber
-from tests import unittest
+from tests import BaseSessionTest, ClientHTTPStubber
 
 
 class TestRDSPresignUrlInjection(BaseSessionTest):
@@ -37,9 +32,9 @@ class TestRDSPresignUrlInjection(BaseSessionTest):
             'SourceRegion': 'us-east-1'
         }
         response_body = (
-                    b'<CopyDBSnapshotResponse>'
-                    b'<CopyDBSnapshotResult></CopyDBSnapshotResult>'
-                    b'</CopyDBSnapshotResponse>'
+            b'<CopyDBSnapshotResponse>'
+            b'<CopyDBSnapshotResult></CopyDBSnapshotResult>'
+            b'</CopyDBSnapshotResponse>'
         )
         self.http_stubber.add_response(body=response_body)
         with self.http_stubber:
@@ -83,9 +78,9 @@ class TestRDSPresignUrlInjection(BaseSessionTest):
             self.assert_presigned_url_injected_in_request(sent_request.body)
 
 
-class TestRDS(unittest.TestCase):
+class TestRDS(BaseSessionTest):
     def setUp(self):
-        self.session = botocore.session.get_session()
+        super().setUp()
         self.client = self.session.create_client('rds', 'us-west-2')
         self.stubber = Stubber(self.client)
         self.stubber.activate()

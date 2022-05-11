@@ -1,34 +1,15 @@
-from tests import unittest
+import pytest
 
 from botocore import model
 from botocore.compat import OrderedDict
-from botocore.exceptions import MissingServiceIdError
+from tests import unittest
 
 
-def test_missing_model_attribute_raises_exception():
-    # We're using a nose test generator here to cut down
-    # on the duplication.  The property names below
-    # all have the same test logic.
+@pytest.mark.parametrize("property_name", ['api_version', 'protocol'])
+def test_missing_model_attribute_raises_exception(property_name):
     service_model = model.ServiceModel({'metadata': {'endpointPrefix': 'foo'}})
-    property_names = ['api_version', 'protocol']
-
-    def _test_attribute_raise_exception(attr_name):
-        try:
-            getattr(service_model, attr_name)
-        except model.UndefinedModelAttributeError:
-            # This is what we expect, so the test passes.
-            pass
-        except Exception as e:
-            raise AssertionError("Expected UndefinedModelAttributeError to "
-                                 "be raised, but %s was raised instead" %
-                                 (e.__class__))
-        else:
-            raise AssertionError(
-                "Expected UndefinedModelAttributeError to "
-                "be raised, but no exception was raised for: %s" % attr_name)
-
-    for name in property_names:
-        yield _test_attribute_raise_exception, name
+    with pytest.raises(model.UndefinedModelAttributeError):
+        getattr(service_model, property_name)
 
 
 class TestServiceId(unittest.TestCase):
@@ -105,8 +86,8 @@ class TestServiceModel(unittest.TestCase):
         }
         service_name = 'myservice'
         service_model = model.ServiceModel(service_model, service_name)
-        with self.assertRaisesRegexp(model.UndefinedModelAttributeError,
-                                     service_name):
+        with self.assertRaisesRegex(model.UndefinedModelAttributeError,
+                                    service_name):
             service_model.service_id
 
     def test_operation_does_not_exist(self):
@@ -181,6 +162,36 @@ class TestOperationModelFromService(unittest.TestCase):
                     },
                     'errors': [{'shape': 'NoSuchResourceException'}],
                     'documentation': 'Docs for OperationTwo',
+                },
+                'PayloadOperation': {
+                    'http': {
+                        'method': 'POST',
+                        'requestUri': '/',
+                    },
+                    'name': 'PayloadOperation',
+                    'input': {
+                        'shape': 'PayloadOperationRequest'
+                    },
+                    'output': {
+                        'shape': 'PayloadOperationResponse',
+                    },
+                    'errors': [{'shape': 'NoSuchResourceException'}],
+                    'documentation': 'Docs for PayloadOperation',
+                },
+                'NoBodyOperation': {
+                    'http': {
+                        'method': 'GET',
+                        'requestUri': '/',
+                    },
+                    'name': 'NoBodyOperation',
+                    'input': {
+                        'shape': 'NoBodyOperationRequest'
+                    },
+                    'output': {
+                        'shape': 'OperationNameResponse',
+                    },
+                    'errors': [{'shape': 'NoSuchResourceException'}],
+                    'documentation': 'Docs for NoBodyOperation',
                 }
             },
             'shapes': {
@@ -199,13 +210,48 @@ class TestOperationModelFromService(unittest.TestCase):
                         }
                     }
                 },
+                'PayloadOperationRequest': {
+                    'type': 'structure',
+                    'members': {
+                        'Arg1': {'shape': 'TestConfig'},
+                        'Arg2': {'shape': 'stringType'},
+                    },
+                    'payload': 'Arg1'
+                },
+                'PayloadOperationResponse': {
+                    'type': 'structure',
+                    'members': {
+                        'String': {
+                            'shape': 'stringType',
+                        }
+                    },
+                    'payload': 'String'
+                },
+                'NoBodyOperationRequest': {
+                    'type': 'structure',
+                    'members': {
+                        'data': {
+                            'location': 'header',
+                            'locationName': 'x-amz-data',
+                            'shape': 'stringType'
+                        }
+                    }
+                },
                 'NoSuchResourceException': {
                     'type': 'structure',
                     'members': {}
                 },
                 'stringType': {
                     'type': 'string',
-                }
+                },
+                'TestConfig': {
+                    'type': 'structure',
+                    'members': {
+                        'timeout': {
+                            'shape': 'stringType'
+                        }
+                    }
+                },
             }
         }
         self.service_model = model.ServiceModel(self.model)
@@ -358,6 +404,38 @@ class TestOperationModelFromService(unittest.TestCase):
     def test_endpoint_discovery_absent(self):
         operation_name = self.service_model.operation_model('OperationName')
         self.assertIsNone(operation_name.endpoint_discovery)
+
+    def test_http_checksum_absent(self):
+        operation_name = self.service_model.operation_model('OperationName')
+        self.assertEqual(operation_name.http_checksum, {})
+
+    def test_http_checksum_present(self):
+        operation = self.model['operations']['OperationName']
+        operation['httpChecksum'] = {
+            "requestChecksumRequired": True,
+            "requestAlgorithmMember": "ChecksumAlgorithm",
+            "requestValidationModeMember": "ChecksumMode",
+            "responseAlgorithms": ["crc32", "crc32c", "sha256", "sha1"],
+        }
+        service_model = model.ServiceModel(self.model)
+        operation_model = service_model.operation_model('OperationName')
+        http_checksum = operation_model.http_checksum
+        self.assertEqual(
+            http_checksum["requestChecksumRequired"],
+            True,
+        )
+        self.assertEqual(
+            http_checksum["requestAlgorithmMember"],
+            "ChecksumAlgorithm",
+        )
+        self.assertEqual(
+            http_checksum["requestValidationModeMember"],
+            "ChecksumMode",
+        )
+        self.assertEqual(
+            http_checksum["responseAlgorithms"],
+            ["crc32", "crc32c", "sha256", "sha1"],
+        )
 
 
 class TestOperationModelEventStreamTypes(unittest.TestCase):
@@ -590,11 +668,15 @@ class TestDeepMerge(unittest.TestCase):
         # map_merged has a serialization as a member trait as well as
         # in the StrToStrMap.
         # The member trait should have precedence.
-        self.assertEqual(map_merged.serialization,
-                         # member beats the definition.
-                         {'name': 'Attribute',
-                          # From the definition.
-                          'flattened': True,})
+        self.assertEqual(
+            map_merged.serialization,
+            # member beats the definition.
+            {
+                'name': 'Attribute',
+                # From the definition.
+                'flattened': True,
+            }
+        )
         # Ensure we don't merge/mutate the original dicts.
         self.assertEqual(map_merged.key.serialization['name'], 'Name')
         self.assertEqual(map_merged.value.serialization['name'], 'Value')
@@ -713,7 +795,7 @@ class TestShapeResolver(unittest.TestCase):
                 }
             },
             'passwordType': {
-                "type":"string",
+                "type": "string",
             }
         }
         resolver = model.ShapeResolver(shapes)
@@ -757,10 +839,11 @@ class TestShapeResolver(unittest.TestCase):
                 }
             },
             'passwordType': {
-                "type":"string",
-                "min":1,
-                "max":128,
-                "sensitive":True
+                "type": "string",
+                "min": 1,
+                "max": 128,
+                "pattern": ".*",
+                "sensitive": True
             }
         }
         resolver = model.ShapeResolver(shapes)
@@ -770,6 +853,7 @@ class TestShapeResolver(unittest.TestCase):
         member = shape.members['OldPassword']
         self.assertEqual(member.metadata['min'], 1)
         self.assertEqual(member.metadata['max'], 128)
+        self.assertEqual(member.metadata['pattern'], '.*')
         self.assertEqual(member.metadata['sensitive'], True)
 
     def test_error_shape_metadata(self):
@@ -795,7 +879,7 @@ class TestShapeResolver(unittest.TestCase):
     def test_shape_list(self):
         shapes = {
             'mfaDeviceListType': {
-                "type":"list",
+                "type": "list",
                 "member": {"shape": "MFADevice"},
             },
             'MFADevice': {

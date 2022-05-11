@@ -1,10 +1,9 @@
-from tests import unittest
-
-import mock
-
-from botocore.history import HistoryRecorder
-from botocore.history import BaseHistoryHandler
-from botocore.history import get_global_history_recorder
+from botocore.history import (
+    BaseHistoryHandler,
+    HistoryRecorder,
+    get_global_history_recorder,
+)
+from tests import mock, unittest
 
 
 class TerribleError(Exception):

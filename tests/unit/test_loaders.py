@@ -19,17 +19,18 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
-import os
 import contextlib
 import copy
-import mock
+import os
 
 from botocore.exceptions import DataNotFoundError, UnknownServiceError
-from botocore.loaders import JSONFileLoader
-from botocore.loaders import Loader, create_loader
-from botocore.loaders import ExtrasProcessor
-
-from tests import BaseEnvVar
+from botocore.loaders import (
+    ExtrasProcessor,
+    JSONFileLoader,
+    Loader,
+    create_loader,
+)
+from tests import BaseEnvVar, mock
 
 
 class TestJSONFileLoader(BaseEnvVar):
@@ -156,8 +157,8 @@ class TestLoader(BaseEnvVar):
 
         # Should have a) the unknown service name and b) list of valid
         # service names.
-        with self.assertRaisesRegexp(UnknownServiceError,
-                                     'Unknown service.*BAZ.*baz'):
+        with self.assertRaisesRegex(UnknownServiceError,
+                                    'Unknown service.*BAZ.*baz'):
             loader.load_service_model('BAZ', type_name='service-2')
 
     def test_load_service_model_uses_provided_type_name(self):
@@ -169,8 +170,8 @@ class TestLoader(BaseEnvVar):
         # Should have a) the unknown service name and b) list of valid
         # service names.
         provided_type_name = 'not-service-2'
-        with self.assertRaisesRegexp(UnknownServiceError,
-                                     'Unknown service.*BAZ.*baz'):
+        with self.assertRaisesRegex(UnknownServiceError,
+                                    'Unknown service.*BAZ.*baz'):
             loader.load_service_model(
                 'BAZ', type_name=provided_type_name)
 
@@ -351,7 +352,6 @@ class TestLoadersWithDirectorySearching(BaseEnvVar):
             with mock.patch('os.path.isdir', mock.Mock(return_value=True)):
                 yield loader
 
-
     def fake_listdir(self, dirname):
         parts = dirname.split(os.path.sep)
         result = self.fake_directories
@@ -426,7 +426,7 @@ class TestLoadersWithDirectorySearching(BaseEnvVar):
             },
         }
         with self.loader_with_fake_dirs() as loader:
-            latest = loader.determine_latest_version('ec2', 'service-2')
+            loader.determine_latest_version('ec2', 'service-2')
             self.assertEqual(loader.determine_latest_version('ec2', 'service-2'),
                              '2014-10-01')
             self.assertEqual(loader.determine_latest_version('ec2', 'service-1'),

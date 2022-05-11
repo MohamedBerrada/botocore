@@ -14,11 +14,10 @@ import os
 import shutil
 import tempfile
 
-import mock
-
-from tests.unit.docs import BaseDocsTest
-from botocore.session import get_session
 from botocore.docs import generate_docs
+from botocore.session import get_session
+from tests import mock
+from tests.unit.docs import BaseDocsTest
 
 
 class TestGenerateDocs(BaseDocsTest):

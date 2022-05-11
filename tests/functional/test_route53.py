@@ -10,10 +10,10 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-from tests import unittest, BaseSessionTest, ClientHTTPStubber
-
 import botocore.session
 from botocore.stub import Stubber
+from tests import BaseSessionTest, ClientHTTPStubber, unittest
+
 
 class TestRoute53Pagination(unittest.TestCase):
     def setUp(self):
@@ -36,7 +36,7 @@ class TestRoute53Pagination(unittest.TestCase):
         self.stubber.add_response(self.operation_name, self.response)
         paginator = self.client.get_paginator('list_hosted_zones')
         with self.stubber:
-            config={'PageSize': 1}
+            config = {'PageSize': 1}
             results = list(paginator.paginate(PaginationConfig=config))
             self.assertTrue(len(results) >= 0)
 
@@ -46,9 +46,10 @@ class TestRoute53Pagination(unittest.TestCase):
         self.stubber.add_response(self.operation_name, self.response)
         paginator = self.client.get_paginator('list_hosted_zones')
         with self.stubber:
-            config={'PageSize': '1'}
+            config = {'PageSize': '1'}
             results = list(paginator.paginate(PaginationConfig=config))
             self.assertTrue(len(results) >= 0)
+
 
 class TestRoute53EndpointResolution(BaseSessionTest):
 

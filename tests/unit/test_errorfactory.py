@@ -10,12 +10,10 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-from tests import unittest
-
+from botocore.errorfactory import BaseClientExceptions, ClientExceptionsFactory
 from botocore.exceptions import ClientError
-from botocore.errorfactory import BaseClientExceptions
-from botocore.errorfactory import ClientExceptionsFactory
 from botocore.model import ServiceModel
+from tests import unittest
 
 
 class TestBaseClientExceptions(unittest.TestCase):
@@ -39,7 +37,7 @@ class TestBaseClientExceptions(unittest.TestCase):
     def test_gettattr_message(self):
         exception_cls = type('MyException', (ClientError,), {})
         self.code_to_exception['MyExceptionCode'] = exception_cls
-        with self.assertRaisesRegexp(
+        with self.assertRaisesRegex(
                 AttributeError, 'Valid exceptions are: MyException'):
             self.exceptions.SomeUnmodeledError
 

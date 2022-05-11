@@ -10,17 +10,18 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-from datetime import datetime
 import re
+from datetime import datetime
 
-import mock
-
-from tests import BaseSessionTest
-from tests import temporary_file
-from tests import assert_url_equal
-from tests import ClientHTTPStubber
+from botocore.config import Config
 from botocore.stub import Stubber
-
+from tests import (
+    BaseSessionTest,
+    ClientHTTPStubber,
+    assert_url_equal,
+    mock,
+    temporary_file,
+)
 
 _V4_SIGNING_REGION_REGEX = re.compile(
     r'AWS4-HMAC-SHA256 '
@@ -55,10 +56,11 @@ class TestSTSPresignedUrl(BaseSessionTest):
 
 
 class TestSTSEndpoints(BaseSessionTest):
-    def create_sts_client(self, region, endpoint_url=None, use_ssl=True):
+    def create_sts_client(self, region, endpoint_url=None, use_ssl=True,
+                          config=None):
         return self.session.create_client(
             'sts', region_name=region, endpoint_url=endpoint_url,
-            use_ssl=use_ssl,
+            use_ssl=use_ssl, config=config
         )
 
     def set_sts_regional_for_config_file(self, fileobj, config_val):
@@ -132,6 +134,26 @@ class TestSTSEndpoints(BaseSessionTest):
         self.assert_request_sent(
             sts,
             expected_url='https://sts-fips.us-west-2.amazonaws.com/',
+            expected_signing_region='us-west-2'
+        )
+
+    def test_dualstack_endpoint_with_legacy_configured(self):
+        self.environ['AWS_STS_REGIONAL_ENDPOINTS'] = 'legacy'
+        dualstack_config = Config(use_dualstack_endpoint=True)
+        sts = self.create_sts_client('us-west-2', config=dualstack_config)
+        self.assert_request_sent(
+            sts,
+            expected_url='https://sts.us-west-2.api.aws/',
+            expected_signing_region='us-west-2'
+        )
+
+    def test_dualstack_endpoint_with_regional_configured(self):
+        dualstack_config = Config(use_dualstack_endpoint=True)
+        self.environ['AWS_STS_REGIONAL_ENDPOINTS'] = 'regional'
+        sts = self.create_sts_client('us-west-2', config=dualstack_config)
+        self.assert_request_sent(
+            sts,
+            expected_url='https://sts.us-west-2.api.aws/',
             expected_signing_region='us-west-2'
         )
 
@@ -255,7 +277,8 @@ class TestSTSEndpoints(BaseSessionTest):
         self.environ['AWS_STS_REGIONAL_ENDPOINTS'] = 'legacy'
         sts = self.create_sts_client('not-real')
         self.assert_request_sent(
-            sts,expected_url='https://sts.not-real.amazonaws.com/')
+            sts, expected_url='https://sts.not-real.amazonaws.com/'
+        )
 
     def test_client_for_unknown_region_with_regional_configured(self):
         self.environ['AWS_STS_REGIONAL_ENDPOINTS'] = 'regional'

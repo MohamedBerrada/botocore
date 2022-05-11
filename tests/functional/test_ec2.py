@@ -11,12 +11,11 @@
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 import datetime
-import mock
 
-from tests import unittest, ClientHTTPStubber, BaseSessionTest
-from botocore.compat import parse_qs, urlparse
-from botocore.stub import Stubber, ANY
 import botocore.session
+from botocore.compat import parse_qs, urlparse
+from botocore.stub import ANY, Stubber
+from tests import BaseSessionTest, ClientHTTPStubber, mock, unittest
 
 
 class TestIdempotencyToken(unittest.TestCase):

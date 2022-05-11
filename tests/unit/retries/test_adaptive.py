@@ -1,11 +1,5 @@
-from tests import unittest
-
-import mock
-
-from botocore.retries import adaptive
-from botocore.retries import standard
-from botocore.retries import bucket
-from botocore.retries import throttling
+from botocore.retries import adaptive, bucket, standard, throttling
+from tests import mock, unittest
 
 
 class FakeClock(bucket.Clock):
@@ -87,6 +81,7 @@ class TestClientRateLimiter(unittest.TestCase):
         # The most we should go up is 2.0 * 20
         rate_limiter.on_receiving_response()
         self.assertEqual(self.token_bucket.max_rate, 2.0 * 20)
+
 
 class TestRateClocker(unittest.TestCase):
 

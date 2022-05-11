@@ -11,11 +11,9 @@
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 import os
-from tests import unittest
-
-import mock
 
 import botocore.session
+from tests import mock, unittest
 
 
 # Basic sanity checks for loader functionality.

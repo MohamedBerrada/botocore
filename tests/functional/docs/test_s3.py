@@ -10,8 +10,8 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-from tests.functional.docs import BaseDocsFunctionalTest
 from botocore.docs.service import ServiceDocumenter
+from tests.functional.docs import BaseDocsFunctionalTest
 
 
 class TestS3Docs(BaseDocsFunctionalTest):
@@ -43,15 +43,19 @@ class TestS3Docs(BaseDocsFunctionalTest):
             self.assertNotIn('ContentMD5=\'string\'',
                              method_contents.decode('utf-8'))
 
+    def test_generate_presigned_url_documented(self):
+        content = self.get_docstring_for_method('s3', 'generate_presigned_url')
+        self.assert_contains_line('generate_presigned_url', content)
+
     def test_copy_source_documented_as_union_type(self):
-        content  = self.get_docstring_for_method('s3', 'copy_object')
+        content = self.get_docstring_for_method('s3', 'copy_object')
         dict_form = (
             "{'Bucket': 'string', 'Key': 'string', 'VersionId': 'string'}")
         self.assert_contains_line(
             "CopySource='string' or %s" % dict_form, content)
 
     def test_copy_source_param_docs_also_modified(self):
-        content  = self.get_docstring_for_method('s3', 'copy_object')
+        content = self.get_docstring_for_method('s3', 'copy_object')
         param_docs = self.get_parameter_document_block('CopySource', content)
         # We don't want to overspecify the test, so I've picked
         # an arbitrary line from the customized docs.

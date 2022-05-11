@@ -12,22 +12,26 @@
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 
-from tests import unittest
-import os
-import tempfile
-import shutil
 import io
+import os
+import shutil
 import socket
-import sys
+import tempfile
 
-from mock import Mock, patch
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
-from botocore.exceptions import UnseekableStreamError
-from botocore.awsrequest import AWSRequest, AWSPreparedRequest, AWSResponse
-from botocore.awsrequest import AWSHTTPConnection, AWSHTTPSConnection, HeadersDict
-from botocore.awsrequest import prepare_request_dict, create_request_object
+from botocore.awsrequest import (
+    AWSHTTPConnection,
+    AWSHTTPSConnection,
+    AWSRequest,
+    AWSResponse,
+    HeadersDict,
+    create_request_object,
+    prepare_request_dict,
+)
 from botocore.compat import file_type, six
+from botocore.exceptions import UnseekableStreamError
+from tests import mock, unittest
 
 
 class IgnoreCloseBytesIO(io.BytesIO):
@@ -120,6 +124,15 @@ class TestAWSRequest(unittest.TestCase):
         request = AWSRequest(url='http://example.com/', params={'foo': 'bar'})
         prepared_request = request.prepare()
         self.assertEqual(prepared_request.url, 'http://example.com/?foo=bar')
+
+    def test_can_prepare_url_params_with_existing_query(self):
+        request = AWSRequest(
+            url='http://example.com/?bar=foo', params={'foo': 'bar'}
+        )
+        prepared_request = request.prepare()
+        self.assertEqual(
+            prepared_request.url, 'http://example.com/?bar=foo&foo=bar'
+        )
 
     def test_can_prepare_dict_body(self):
         body = {'dead': 'beef'}
@@ -236,13 +249,18 @@ class TestAWSRequest(unittest.TestCase):
         # we first need to determine if the thing is a file like object.
         # We should not be using an isinstance check.  Instead, we should
         # be using duck type checks.
+
         class LooksLikeFile(object):
+
             def __init__(self):
                 self.seek_called = False
+
             def read(self, amount=None):
                 pass
+
             def seek(self, where):
                 self.seek_called = True
+
         looks_like_file = LooksLikeFile()
         self.prepared_request.body = looks_like_file
         self.prepared_request.reset_stream()
@@ -253,7 +271,7 @@ class TestAWSRequest(unittest.TestCase):
 class TestAWSResponse(unittest.TestCase):
     def setUp(self):
         self.response = AWSResponse('http://url.com', 200, HeadersDict(), None)
-        self.response.raw = Mock()
+        self.response.raw = mock.Mock()
 
     def set_raw_stream(self, blobs):
         def stream(*args, **kwargs):
@@ -271,11 +289,11 @@ class TestAWSResponse(unittest.TestCase):
     def test_text_property(self):
         self.set_raw_stream([b'\xe3\x82\xb8\xe3\x83\xa7\xe3\x82\xb0'])
         self.response.headers['content-type'] = 'text/plain; charset=utf-8'
-        self.assertEquals(self.response.text, u'\u30b8\u30e7\u30b0')
+        self.assertEqual(self.response.text, u'\u30b8\u30e7\u30b0')
 
     def test_text_property_defaults_utf8(self):
         self.set_raw_stream([b'\xe3\x82\xb8\xe3\x83\xa7\xe3\x82\xb0'])
-        self.assertEquals(self.response.text, u'\u30b8\u30e7\u30b0')
+        self.assertEqual(self.response.text, u'\u30b8\u30e7\u30b0')
 
 
 class TestAWSHTTPConnection(unittest.TestCase):
@@ -288,8 +306,8 @@ class TestAWSHTTPConnection(unittest.TestCase):
         conn._tunnel_headers = {'key': 'value'}
 
         # Create a mock response.
-        self.mock_response = Mock()
-        self.mock_response.fp = Mock()
+        self.mock_response = mock.Mock()
+        self.mock_response.fp = mock.Mock()
 
         # Imitate readline function by creating a list to be sent as
         # a side effect of the mocked readline to be able to track how the
@@ -312,12 +330,12 @@ class TestAWSHTTPConnection(unittest.TestCase):
             response_components[0], int(response_components[1]),
             response_components[2]
         )
-        conn.response_class = Mock()
+        conn.response_class = mock.Mock()
         conn.response_class.return_value = self.mock_response
         return conn
 
     def test_expect_100_continue_returned(self):
-        with patch('urllib3.util.wait_for_read') as wait_mock:
+        with mock.patch('urllib3.util.wait_for_read') as wait_mock:
             # Shows the server first sending a 100 continue response
             # then a 200 ok response.
             s = FakeSocket(b'HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\n')
@@ -333,7 +351,7 @@ class TestAWSHTTPConnection(unittest.TestCase):
             self.assertEqual(response.status, 200)
 
     def test_handles_expect_100_with_different_reason_phrase(self):
-        with patch('urllib3.util.wait_for_read') as wait_mock:
+        with mock.patch('urllib3.util.wait_for_read') as wait_mock:
             # Shows the server first sending a 100 continue response
             # then a 200 ok response.
             s = FakeSocket(b'HTTP/1.1 100 (Continue)\r\n\r\nHTTP/1.1 200 OK\r\n')
@@ -355,7 +373,7 @@ class TestAWSHTTPConnection(unittest.TestCase):
         # When using squid as an HTTP proxy, it will also send
         # a Connection: keep-alive header back with the 100 continue
         # response.  We need to ensure we handle this case.
-        with patch('urllib3.util.wait_for_read') as wait_mock:
+        with mock.patch('urllib3.util.wait_for_read') as wait_mock:
             # Shows the server first sending a 100 continue response
             # then a 500 response.  We're picking 500 to confirm we
             # actually parse the response instead of getting the
@@ -378,7 +396,7 @@ class TestAWSHTTPConnection(unittest.TestCase):
     def test_expect_100_continue_sends_307(self):
         # This is the case where we send a 100 continue and the server
         # immediately sends a 307
-        with patch('urllib3.util.wait_for_read') as wait_mock:
+        with mock.patch('urllib3.util.wait_for_read') as wait_mock:
             # Shows the server first sending a 100 continue response
             # then a 200 ok response.
             s = FakeSocket(
@@ -396,7 +414,7 @@ class TestAWSHTTPConnection(unittest.TestCase):
             self.assertEqual(response.status, 307)
 
     def test_expect_100_continue_no_response_from_server(self):
-        with patch('urllib3.util.wait_for_read') as wait_mock:
+        with mock.patch('urllib3.util.wait_for_read') as wait_mock:
             # Shows the server first sending a 100 continue response
             # then a 200 ok response.
             s = FakeSocket(
@@ -477,7 +495,7 @@ class TestAWSHTTPConnection(unittest.TestCase):
         conn.sock = s
         # Test that the standard library method was used by patching out
         # the ``_tunnel`` method and seeing if the std lib method was called.
-        with patch('urllib3.connection.HTTPConnection._tunnel') as mock_tunnel:
+        with mock.patch('urllib3.connection.HTTPConnection._tunnel') as mock_tunnel:
             conn._tunnel()
             self.assertTrue(mock_tunnel.called)
 
@@ -495,7 +513,7 @@ class TestAWSHTTPConnection(unittest.TestCase):
     def test_state_reset_on_connection_close(self):
         # This simulates what urllib3 does with connections
         # in its connection pool logic.
-        with patch('urllib3.util.wait_for_read') as wait_mock:
+        with mock.patch('urllib3.util.wait_for_read') as wait_mock:
 
             # First fast fail with a 500 response when we first
             # send the expect header.
@@ -504,8 +522,9 @@ class TestAWSHTTPConnection(unittest.TestCase):
             conn.sock = s
             wait_mock.return_value = True
 
-            conn.request('GET', '/bucket/foo', b'body',
-                        {'Expect': b'100-continue'})
+            conn.request(
+                'GET', '/bucket/foo', b'body', {'Expect': b'100-continue'}
+            )
             self.assertEqual(wait_mock.call_count, 1)
             response = conn.getresponse()
             self.assertEqual(response.status, 500)
@@ -525,8 +544,9 @@ class TestAWSHTTPConnection(unittest.TestCase):
             # that was sent back.
             wait_mock.return_value = True
 
-            conn.request('GET', '/bucket/foo', b'body',
-                        {'Expect': b'100-continue'})
+            conn.request(
+                'GET', '/bucket/foo', b'body', {'Expect': b'100-continue'}
+            )
             # Assert that we waited for the 100-continue response
             self.assertEqual(wait_mock.call_count, 2)
             response = conn.getresponse()

@@ -11,35 +11,38 @@
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 
-from tests import unittest, BaseSessionTest
-
 import base64
-import mock
 import copy
-import os
 import json
+import os
+
+import pytest
 
 import botocore
 import botocore.session
-from botocore.compat import OrderedDict
-from botocore.exceptions import ParamValidationError, MD5UnavailableError
-from botocore.exceptions import AliasConflictParameterError
-from botocore.exceptions import MissingServiceIdError
-from botocore.awsrequest import AWSRequest
-from botocore.compat import quote, six
-from botocore.config import Config
-from botocore.docs.bcdoc.restdoc import DocumentStructure
-from botocore.docs.params import RequestParamsDocumenter
-from botocore.docs.example import RequestExampleDocumenter
-from botocore.hooks import HierarchicalEmitter
-from botocore.loaders import Loader
-from botocore.model import OperationModel, ServiceModel, ServiceId
-from botocore.model import DenormalizedStructureBuilder
-from botocore.session import Session
-from botocore.signers import RequestSigner
-from botocore.credentials import Credentials
-from botocore.utils import conditionally_calculate_md5
 from botocore import handlers
+from botocore.awsrequest import AWSRequest
+from botocore.compat import OrderedDict, quote, six
+from botocore.config import Config
+from botocore.credentials import Credentials
+from botocore.docs.bcdoc.restdoc import DocumentStructure
+from botocore.docs.example import RequestExampleDocumenter
+from botocore.docs.params import RequestParamsDocumenter
+from botocore.exceptions import (
+    AliasConflictParameterError,
+    MD5UnavailableError,
+    ParamValidationError,
+)
+from botocore.hooks import HierarchicalEmitter
+from botocore.model import (
+    DenormalizedStructureBuilder,
+    OperationModel,
+    ServiceId,
+    ServiceModel,
+)
+from botocore.signers import RequestSigner
+from botocore.utils import conditionally_calculate_md5
+from tests import BaseSessionTest, mock, unittest
 
 
 class TestHandlers(BaseSessionTest):
@@ -126,7 +129,7 @@ class TestHandlers(BaseSessionTest):
                          'foo/keyname%2B?versionId=asdf+')
 
     def test_copy_source_has_validation_failure(self):
-        with self.assertRaisesRegexp(ParamValidationError, 'Key'):
+        with self.assertRaisesRegex(ParamValidationError, 'Key'):
             handlers.handle_copy_source_param(
                 {'CopySource': {'Bucket': 'foo'}})
 
@@ -1027,7 +1030,7 @@ class TestRetryHandlerOrder(BaseSessionTest):
         operation = service_model.operation_model('CopyObject')
         responses = client.meta.events.emit(
             'needs-retry.s3.CopyObject',
-            request_dict={},
+            request_dict={'context': {}},
             response=(mock.Mock(), mock.Mock()), endpoint=mock.Mock(),
             operation=operation, attempts=1, caught_exception=None)
         # This is implementation specific, but we're trying to verify that
@@ -1239,6 +1242,31 @@ class TestAddMD5(BaseMD5Test):
             request_dict['headers']['Content-MD5'],
             'OFj2IjCsPJFfMAxmQxLGPw==')
 
+    def test_skip_md5_when_flexible_checksum_context(self):
+        request_dict = {
+            'body': six.BytesIO(b'foobar'),
+            'headers': {},
+            'context': {
+                'checksum': {
+                    'request_algorithm': {
+                        'in': 'header',
+                        'algorithm': 'crc32',
+                        'name': 'x-amz-checksum-crc32',
+                    }
+                }
+            }
+        }
+        conditionally_calculate_md5(request_dict)
+        self.assertNotIn('Content-MD5', request_dict['headers'])
+
+    def test_skip_md5_when_flexible_checksum_explicit_header(self):
+        request_dict = {
+            'body': six.BytesIO(b'foobar'),
+            'headers': {'x-amz-checksum-crc32': 'foo'},
+        }
+        conditionally_calculate_md5(request_dict)
+        self.assertNotIn('Content-MD5', request_dict['headers'])
+
 
 class TestParameterAlias(unittest.TestCase):
     def setUp(self):
@@ -1305,10 +1333,10 @@ class TestParameterAlias(unittest.TestCase):
             self.sample_section
         )
         contents = self.sample_section.flush_structure().decode('utf-8')
-        self.assertIn(':type ' + self.alias_name + ':',  contents)
-        self.assertIn(':param ' + self.alias_name + ':',  contents)
-        self.assertNotIn(':type ' + self.original_name + ':',  contents)
-        self.assertNotIn(':param ' + self.original_name + ':',  contents)
+        self.assertIn(':type ' + self.alias_name + ':', contents)
+        self.assertIn(':param ' + self.alias_name + ':', contents)
+        self.assertNotIn(':type ' + self.original_name + ':', contents)
+        self.assertNotIn(':param ' + self.original_name + ':', contents)
 
     def test_alias_parameter_in_documentation_request_example(self):
         RequestExampleDocumenter(
@@ -1319,7 +1347,7 @@ class TestParameterAlias(unittest.TestCase):
             self.sample_section
         )
         contents = self.sample_section.flush_structure().decode('utf-8')
-        self.assertIn(self.alias_name + '=',  contents)
+        self.assertIn(self.alias_name + '=', contents)
         self.assertNotIn(self.original_name + '=', contents)
 
 
@@ -1367,10 +1395,29 @@ class TestPrependToHost(unittest.TestCase):
 
     def test_does_validate_long_host(self):
         with self.assertRaises(ParamValidationError):
-           self._prepend_to_host(
-               'https://example.com/path', 'toolong'*100)
+            self._prepend_to_host('https://example.com/path', 'toolong' * 100)
 
     def test_does_validate_host_with_illegal_char(self):
         with self.assertRaises(ParamValidationError):
-           self._prepend_to_host(
-               'https://example.com/path', 'host#name')
+            self._prepend_to_host('https://example.com/path', 'host#name')
+
+
+@pytest.mark.parametrize(
+    'environ, header_before, header_after',
+    [
+        ({'AWS_LAMBDA_FUNCTION_NAME': 'foo'}, {}, {}),
+        ({'_X_AMZ_TRACE_ID': 'bar'}, {}, {}),
+        ({'AWS_LAMBDA_FUNCTION_NAME': 'foo', '_X_AMZ_TRACE_ID': 'bar'},
+         {}, {'X-Amzn-Trace-Id': 'bar'}),
+        ({'AWS_LAMBDA_FUNCTION_NAME': 'foo', '_X_AMZ_TRACE_ID': 'bar'},
+         {'X-Amzn-Trace-Id': 'fizz'}, {'X-Amzn-Trace-Id': 'fizz'}),
+        ({'AWS_LAMBDA_FUNCTION_NAME': 'foo',
+          '_X_AMZ_TRACE_ID': 'first\nsecond'},
+         {}, {'X-Amzn-Trace-Id': 'first%0Asecond'})
+    ]
+)
+def test_add_recursion_detection_header(environ, header_before, header_after):
+    request_dict = {'headers': header_before}
+    with mock.patch('os.environ', environ):
+        handlers.add_recursion_detection_header(request_dict)
+        assert request_dict['headers'] == header_after

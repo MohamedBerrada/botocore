@@ -12,12 +12,14 @@
 # language governing permissions and limitations under the License.
 import copy
 import functools
-
-from tests import unittest
 from functools import partial
 
-from botocore.hooks import HierarchicalEmitter, first_non_none_response
-from botocore.hooks import EventAliaser
+from botocore.hooks import (
+    EventAliaser,
+    HierarchicalEmitter,
+    first_non_none_response,
+)
+from tests import unittest
 
 
 class TestHierarchicalEventEmitter(unittest.TestCase):
@@ -567,10 +569,12 @@ class TestWildcardHandlers(unittest.TestCase):
         # Here we're not testing copy directly, we're testing
         # the observable behavior from copying an event emitter.
         first = []
+
         def first_handler(id_name, **kwargs):
             first.append(id_name)
 
         second = []
+
         def second_handler(id_name, **kwargs):
             second.append(id_name)
 
@@ -609,10 +613,12 @@ class TestWildcardHandlers(unittest.TestCase):
         # Here we're not testing copy directly, we're testing
         # the observable behavior from copying an event emitter.
         first = []
+
         def first_handler(id_name, **kwargs):
             first.append(id_name)
 
         second = []
+
         def second_handler(id_name, **kwargs):
             second.append(id_name)
 

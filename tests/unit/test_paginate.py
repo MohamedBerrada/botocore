@@ -11,16 +11,16 @@
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 
-from tests import unittest
 from botocore import model
-from botocore.paginate import Paginator
-from botocore.paginate import PaginatorModel
-from botocore.paginate import TokenDecoder
-from botocore.paginate import TokenEncoder
-from botocore.exceptions import PaginationError
 from botocore.compat import six
-
-import mock
+from botocore.exceptions import PaginationError
+from botocore.paginate import (
+    Paginator,
+    PaginatorModel,
+    TokenDecoder,
+    TokenEncoder,
+)
+from tests import mock, unittest
 
 
 def encode_token(token):
@@ -90,7 +90,7 @@ class TestPaginatorModel(unittest.TestCase):
 
     def test_get_paginator_no_exists(self):
         with self.assertRaises(ValueError):
-            paginator_config = self.paginator_model.get_paginator('ListBars')
+            self.paginator_model.get_paginator('ListBars')
 
 
 class TestPagination(unittest.TestCase):
@@ -823,7 +823,7 @@ class TestKeyIterators(unittest.TestCase):
             {"Users": ["User3"]},
         ]
         self.method.side_effect = responses
-        with self.assertRaisesRegexp(ValueError, 'Bad starting token'):
+        with self.assertRaisesRegex(ValueError, 'Bad starting token'):
             pagination_config = {'StartingToken': 'does___not___work'}
             self.paginator.paginate(
                 PaginationConfig=pagination_config).build_full_result()
@@ -1408,11 +1408,11 @@ class TestStringPageSize(unittest.TestCase):
         self.paginator = Paginator(self.method, self.paginate_config, self.model)
 
     def test_int_page_size(self):
-        res = list(self.paginator.paginate(PaginationConfig={'PageSize': 1}))
+        list(self.paginator.paginate(PaginationConfig={'PageSize': 1}))
         self.method.assert_called_with(MaxItems='1')
 
     def test_str_page_size(self):
-        res = list(self.paginator.paginate(PaginationConfig={'PageSize': '1'}))
+        list(self.paginator.paginate(PaginationConfig={'PageSize': '1'}))
         self.method.assert_called_with(MaxItems='1')
 
 

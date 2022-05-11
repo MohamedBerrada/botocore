@@ -11,46 +11,84 @@
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 import base64
-import re
-import time
-import logging
-import datetime
-import hashlib
 import binascii
-import functools
-import weakref
-import random
-import os
-import socket
 import cgi
-import warnings
+import datetime
+import functools
+import hashlib
+import io
+import logging
+import os
+import random
+import re
+import socket
+import time
+import weakref
 
 import dateutil.parser
 from dateutil.tz import tzutc
+from urllib3.exceptions import LocationParseError
 
 import botocore
 import botocore.awsrequest
 import botocore.httpsession
+
+# IP Regexes retained for backwards compatibility
+from botocore.compat import HEX_PAT  # noqa: F401
+from botocore.compat import IPV4_PAT  # noqa: F401
+from botocore.compat import IPV6_ADDRZ_PAT  # noqa: F401
+from botocore.compat import IPV6_ADDRZ_RE  # noqa: F401
+from botocore.compat import IPV6_PAT  # noqa: F401
+from botocore.compat import LS32_PAT  # noqa: F401
+from botocore.compat import UNRESERVED_PAT  # noqa: F401
+from botocore.compat import UNSAFE_URL_CHARS  # noqa: F401
+from botocore.compat import ZONE_ID_PAT  # noqa: F401
 from botocore.compat import (
-        json, quote, zip_longest, urlsplit, urlunsplit, OrderedDict,
-        six, urlparse, get_tzinfo_options, get_md5, MD5_AVAILABLE
+    HAS_CRT,
+    MD5_AVAILABLE,
+    OrderedDict,
+    get_md5,
+    get_tzinfo_options,
+    json,
+    quote,
+    six,
+    urlparse,
+    urlsplit,
+    urlunsplit,
+    zip_longest,
+)
+from botocore.exceptions import (
+    ClientError,
+    ConfigNotFound,
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    HTTPClientError,
+    InvalidDNSNameError,
+    InvalidEndpointConfigurationError,
+    InvalidExpressionError,
+    InvalidHostLabelError,
+    InvalidIMDSEndpointError,
+    InvalidIMDSEndpointModeError,
+    InvalidRegionError,
+    MetadataRetrievalError,
+    MissingDependencyException,
+    ReadTimeoutError,
+    SSOTokenLoadError,
+    UnsupportedOutpostResourceError,
+    UnsupportedS3AccesspointConfigurationError,
+    UnsupportedS3ArnError,
+    UnsupportedS3ConfigurationError,
+    UnsupportedS3ControlArnError,
+    UnsupportedS3ControlConfigurationError,
 )
 from botocore.vendored.six.moves.urllib.request import getproxies, proxy_bypass
-from botocore.exceptions import (
-    InvalidExpressionError, ConfigNotFound, InvalidDNSNameError, ClientError,
-    MetadataRetrievalError, EndpointConnectionError, ReadTimeoutError,
-    ConnectionClosedError, ConnectTimeoutError, UnsupportedS3ArnError,
-    UnsupportedS3AccesspointConfigurationError, SSOTokenLoadError,
-    InvalidRegionError, InvalidIMDSEndpointError, UnsupportedOutpostResourceError,
-    UnsupportedS3ControlConfigurationError, UnsupportedS3ControlArnError,
-    InvalidHostLabelError, HTTPClientError, UnsupportedS3ConfigurationError,
-)
-from urllib3.exceptions import LocationParseError
 
 logger = logging.getLogger(__name__)
 DEFAULT_METADATA_SERVICE_TIMEOUT = 1
 METADATA_BASE_URL = 'http://169.254.169.254/'
-METADATA_BASE_URL_IPv6 = 'http://[fe80:ec2::254%eth0]/'
+METADATA_BASE_URL_IPv6 = 'http://[fd00:ec2::254]/'
+METADATA_ENDPOINT_MODES = ('ipv4', 'ipv6')
 
 # These are chars that do not need to be urlencoded.
 # Based on rfc2986, section 2.3
@@ -140,41 +178,12 @@ EVENT_ALIASES = {
     "tagging": "resource-groups-tagging-api"
 }
 
-# Vendoring IPv6 validation regex patterns from urllib3
-# https://github.com/urllib3/urllib3/blob/7e856c0/src/urllib3/util/url.py
-IPV4_PAT = r"(?:[0-9]{1,3}\.){3}[0-9]{1,3}"
-HEX_PAT = "[0-9A-Fa-f]{1,4}"
-LS32_PAT = "(?:{hex}:{hex}|{ipv4})".format(hex=HEX_PAT, ipv4=IPV4_PAT)
-_subs = {"hex": HEX_PAT, "ls32": LS32_PAT}
-_variations = [
-    #                            6( h16 ":" ) ls32
-    "(?:%(hex)s:){6}%(ls32)s",
-    #                       "::" 5( h16 ":" ) ls32
-    "::(?:%(hex)s:){5}%(ls32)s",
-    # [               h16 ] "::" 4( h16 ":" ) ls32
-    "(?:%(hex)s)?::(?:%(hex)s:){4}%(ls32)s",
-    # [ *1( h16 ":" ) h16 ] "::" 3( h16 ":" ) ls32
-    "(?:(?:%(hex)s:)?%(hex)s)?::(?:%(hex)s:){3}%(ls32)s",
-    # [ *2( h16 ":" ) h16 ] "::" 2( h16 ":" ) ls32
-    "(?:(?:%(hex)s:){0,2}%(hex)s)?::(?:%(hex)s:){2}%(ls32)s",
-    # [ *3( h16 ":" ) h16 ] "::"    h16 ":"   ls32
-    "(?:(?:%(hex)s:){0,3}%(hex)s)?::%(hex)s:%(ls32)s",
-    # [ *4( h16 ":" ) h16 ] "::"              ls32
-    "(?:(?:%(hex)s:){0,4}%(hex)s)?::%(ls32)s",
-    # [ *5( h16 ":" ) h16 ] "::"              h16
-    "(?:(?:%(hex)s:){0,5}%(hex)s)?::%(hex)s",
-    # [ *6( h16 ":" ) h16 ] "::"
-    "(?:(?:%(hex)s:){0,6}%(hex)s)?::",
-]
 
-UNRESERVED_PAT = r"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._!\-~"
-IPV6_PAT = "(?:" + "|".join([x % _subs for x in _variations]) + ")"
-ZONE_ID_PAT = "(?:%25|%)(?:[" + UNRESERVED_PAT + "]|%[a-fA-F0-9]{2})+"
-IPV6_ADDRZ_PAT = r"\[" + IPV6_PAT + r"(?:" + ZONE_ID_PAT + r")?\]"
-IPV6_ADDRZ_RE = re.compile("^" + IPV6_ADDRZ_PAT + "$")
-
-# These are the characters that are stripped by post-bpo-43882 urlparse().
-UNSAFE_URL_CHARS = frozenset('\t\r\n')
+# This pattern can be used to detect if a header is a flexible checksum header
+CHECKSUM_HEADER_PATTERN = re.compile(
+    r'^X-Amz-Checksum-([a-z0-9]*)$',
+    flags=re.IGNORECASE,
+)
 
 
 def ensure_boolean(val):
@@ -184,8 +193,31 @@ def ensure_boolean(val):
     """
     if isinstance(val, bool):
         return val
-    else:
+    elif isinstance(val, str):
         return val.lower() == 'true'
+    else:
+        return False
+
+
+def resolve_imds_endpoint_mode(session):
+    """Resolving IMDS endpoint mode to either IPv6 or IPv4.
+
+    ec2_metadata_service_endpoint_mode takes precedence over imds_use_ipv6.
+    """
+    endpoint_mode = session.get_config_variable(
+        'ec2_metadata_service_endpoint_mode')
+    if endpoint_mode is not None:
+        lendpoint_mode = endpoint_mode.lower()
+        if lendpoint_mode not in METADATA_ENDPOINT_MODES:
+            error_msg_kwargs = {
+                'mode': endpoint_mode,
+                'valid_modes': METADATA_ENDPOINT_MODES
+            }
+            raise InvalidIMDSEndpointModeError(**error_msg_kwargs)
+        return lendpoint_mode
+    elif session.get_config_variable('imds_use_ipv6'):
+        return 'ipv6'
+    return 'ipv4'
 
 
 def is_json_value_header(shape):
@@ -197,10 +229,24 @@ def is_json_value_header(shape):
     :return: True if this type is a jsonvalue, False otherwise
     :rtype: Bool
     """
-    return (hasattr(shape, 'serialization') and
-            shape.serialization.get('jsonvalue', False) and
-            shape.serialization.get('location') == 'header' and
-            shape.type_name == 'string')
+    return (
+        hasattr(shape, 'serialization') and
+        shape.serialization.get('jsonvalue', False) and
+        shape.serialization.get('location') == 'header' and
+        shape.type_name == 'string'
+    )
+
+
+def has_header(header_name, headers):
+    """Case-insensitive check for header key."""
+    if header_name is None:
+        return False
+    elif isinstance(headers, botocore.awsrequest.HeadersDict):
+        return header_name in headers
+    else:
+        return header_name.lower() in [
+            key.lower() for key in headers.keys()
+        ]
 
 
 def get_service_module_name(service_model):
@@ -304,6 +350,13 @@ def set_value_from_jmespath(source, expression, value, is_first=True):
     source[current_key] = value
 
 
+def is_global_accesspoint(context):
+    """Determine if request is intended for an MRAP accesspoint."""
+    s3_accesspoint = context.get('s3_accesspoint', {})
+    is_global = s3_accesspoint.get('region') == ''
+    return is_global
+
+
 class _RetriesExceededError(Exception):
     """Internal exception used when the number of retries are exceeded."""
     pass
@@ -325,7 +378,10 @@ class IMDSFetcher(object):
                  env=None, user_agent=None, config=None):
         self._timeout = timeout
         self._num_attempts = num_attempts
+        if config is None:
+            config = {}
         self._base_url = self._select_base_url(base_url, config)
+        self._config = config
 
         if env is None:
             env = os.environ.copy()
@@ -339,17 +395,17 @@ class IMDSFetcher(object):
 
     def get_base_url(self):
         return self._base_url
-    
-    def _select_base_url(self, base_url, config):
-        if config is None:
-            config = {}
 
-        requires_ipv6 = ensure_boolean(config.get('imds_use_ipv6', False))
+    def _select_base_url(self, base_url, config):
+        requires_ipv6 = config.get(
+            'ec2_metadata_service_endpoint_mode') == 'ipv6'
         custom_metadata_endpoint = config.get('ec2_metadata_service_endpoint')
 
         if requires_ipv6 and custom_metadata_endpoint:
-            logger.warn("Custom endpoint and IMDS_USE_IPV6 are both set. Using custom endpoint.")
-        
+            logger.warning(
+                "Custom endpoint and IMDS_USE_IPV6 are both set. Using custom endpoint."
+            )
+
         chosen_base_url = None
 
         if base_url != METADATA_BASE_URL:
@@ -367,9 +423,15 @@ class IMDSFetcher(object):
 
         return chosen_base_url
 
+    def _construct_url(self, path):
+        sep = ''
+        if self._base_url and not self._base_url.endswith('/'):
+            sep = '/'
+        return f'{self._base_url}{sep}{path}'
+
     def _fetch_metadata_token(self):
         self._assert_enabled()
-        url = self._base_url + self._TOKEN_PATH
+        url = self._construct_url(self._TOKEN_PATH)
         headers = {
             'x-aws-ec2-metadata-token-ttl-seconds': self._TOKEN_TTL,
         }
@@ -417,7 +479,7 @@ class IMDSFetcher(object):
         self._assert_enabled()
         if retry_func is None:
             retry_func = self._default_retry
-        url = self._base_url + url_path
+        url = self._construct_url(url_path)
         headers = {}
         if token is not None:
             headers['x-aws-ec2-metadata-token'] = token
@@ -488,13 +550,15 @@ class InstanceMetadataFetcher(IMDSFetcher):
             role_name = self._get_iam_role(token)
             credentials = self._get_credentials(role_name, token)
             if self._contains_all_credential_fields(credentials):
-                return {
+                credentials = {
                     'role_name': role_name,
                     'access_key': credentials['AccessKeyId'],
                     'secret_key': credentials['SecretAccessKey'],
                     'token': credentials['Token'],
                     'expiry_time': credentials['Expiration'],
                 }
+                self._evaluate_expiration(credentials)
+                return credentials
             else:
                 # IMDS can return a 200 response that has a JSON formatted
                 # error message (i.e. if ec2 is not trusted entity for the
@@ -560,6 +624,131 @@ class InstanceMetadataFetcher(IMDSFetcher):
                     field)
                 return False
         return True
+
+    def _evaluate_expiration(self, credentials):
+        expiration = credentials.get("expiry_time")
+        if expiration is None:
+            return
+        try:
+            expiration = datetime.datetime.strptime(
+                expiration, "%Y-%m-%dT%H:%M:%SZ"
+            )
+            refresh_interval = self._config.get(
+                "ec2_credential_refresh_window", 60 * 10
+            )
+            refresh_interval_with_jitter = refresh_interval + random.randint(120, 600)
+            current_time = datetime.datetime.utcnow()
+            refresh_offset = datetime.timedelta(seconds=refresh_interval_with_jitter)
+            extension_time = expiration - refresh_offset
+            if current_time >= extension_time:
+                new_time = current_time + refresh_offset
+                credentials["expiry_time"] = new_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+                logger.info(
+                    f"Attempting credential expiration extension due to a "
+                    f"credential service availability issue. A refresh of "
+                    f"these credentials will be attempted again within "
+                    f"the next {refresh_interval_with_jitter/60:.0f} minutes."
+                )
+        except ValueError:
+            logger.debug(
+                f"Unable to parse expiry_time in {credentials['expiry_time']}"
+            )
+
+
+class IMDSRegionProvider(object):
+    def __init__(self, session, environ=None, fetcher=None):
+        """Initialize IMDSRegionProvider.
+        :type session: :class:`botocore.session.Session`
+        :param session: The session is needed to look up configuration for
+            how to contact the instance metadata service. Specifically the
+            whether or not it should use the IMDS region at all, and if so how
+            to configure the timeout and number of attempts to reach the
+            service.
+        :type environ: None or dict
+        :param environ: A dictionary of environment variables to use. If
+            ``None`` is the argument then ``os.environ`` will be used by
+            default.
+        :type fecther: :class:`botocore.utils.InstanceMetadataRegionFetcher`
+        :param fetcher: The class to actually handle the fetching of the region
+            from the IMDS. If not provided a default one will be created.
+        """
+        self._session = session
+        if environ is None:
+            environ = os.environ
+        self._environ = environ
+        self._fetcher = fetcher
+
+    def provide(self):
+        """Provide the region value from IMDS."""
+        instance_region = self._get_instance_metadata_region()
+        return instance_region
+
+    def _get_instance_metadata_region(self):
+        fetcher = self._get_fetcher()
+        region = fetcher.retrieve_region()
+        return region
+
+    def _get_fetcher(self):
+        if self._fetcher is None:
+            self._fetcher = self._create_fetcher()
+        return self._fetcher
+
+    def _create_fetcher(self):
+        metadata_timeout = self._session.get_config_variable(
+            'metadata_service_timeout')
+        metadata_num_attempts = self._session.get_config_variable(
+            'metadata_service_num_attempts')
+        imds_config = {
+            'ec2_metadata_service_endpoint': self._session.get_config_variable(
+                'ec2_metadata_service_endpoint'),
+            'ec2_metadata_service_endpoint_mode': resolve_imds_endpoint_mode(
+                self._session
+            )
+        }
+        fetcher = InstanceMetadataRegionFetcher(
+            timeout=metadata_timeout,
+            num_attempts=metadata_num_attempts,
+            env=self._environ,
+            user_agent=self._session.user_agent(),
+            config=imds_config,
+        )
+        return fetcher
+
+
+class InstanceMetadataRegionFetcher(IMDSFetcher):
+    _URL_PATH = 'latest/meta-data/placement/availability-zone/'
+
+    def retrieve_region(self):
+        """Get the current region from the instance metadata service.
+        :rvalue: str
+        :returns: The region the current instance is running in or None
+            if the instance metadata service cannot be contacted or does not
+            give a valid response.
+        :rtype: None or str
+        :returns: Returns the region as a string if it is configured to use
+            IMDS as a region source. Otherwise returns ``None``. It will also
+            return ``None`` if it fails to get the region from IMDS due to
+            exhausting its retries or not being able to connect.
+        """
+        try:
+            region = self._get_region()
+            return region
+        except self._RETRIES_EXCEEDED_ERROR_CLS:
+            logger.debug("Max number of attempts exceeded (%s) when "
+                         "attempting to retrieve data from metadata service.",
+                         self._num_attempts)
+        return None
+
+    def _get_region(self):
+        token = self._fetch_metadata_token()
+        response = self._get_request(
+            url_path=self._URL_PATH,
+            retry_func=self._default_retry,
+            token=token
+        )
+        availability_zone = response.text
+        region = availability_zone[:-1]
+        return region
 
 
 def merge_dicts(dict1, dict2, append_lists=False):
@@ -783,7 +972,7 @@ def datetime2timestamp(dt, default_timezone=None):
         dt = dt.replace(tzinfo=default_timezone)
     d = dt.replace(tzinfo=None) - dt.utcoffset() - epoch
     if hasattr(d, "total_seconds"):
-        return d.total_seconds()  # Works in Python 2.7+
+        return d.total_seconds()  # Works in Python 3.6+
     return (d.microseconds + (d.seconds + d.days * 24 * 3600) * 10**6) / 10**6
 
 
@@ -983,8 +1172,9 @@ class ArgumentGenerator(object):
 def is_valid_ipv6_endpoint_url(endpoint_url):
     if UNSAFE_URL_CHARS.intersection(endpoint_url):
         return False
-    netloc = urlparse(endpoint_url).netloc
-    return IPV6_ADDRZ_RE.match(netloc) is not None
+    hostname = '[{}]'.format(urlparse(endpoint_url).hostname)
+    return IPV6_ADDRZ_RE.match(hostname) is not None
+
 
 def is_valid_endpoint_url(endpoint_url):
     """Verify the endpoint_url is valid.
@@ -1013,8 +1203,10 @@ def is_valid_endpoint_url(endpoint_url):
         re.IGNORECASE)
     return allowed.match(hostname)
 
+
 def is_valid_uri(endpoint_url):
     return is_valid_endpoint_url(endpoint_url) or is_valid_ipv6_endpoint_url(endpoint_url)
+
 
 def validate_region_name(region_name):
     """Provided region_name must be a valid host label."""
@@ -1186,7 +1378,7 @@ def switch_host_s3_accelerate(request, operation_name, **kwargs):
 
     if operation_name in ['ListBuckets', 'CreateBucket', 'DeleteBucket']:
         return
-    _switch_hosts(request, endpoint,  use_new_scheme=False)
+    _switch_hosts(request, endpoint, use_new_scheme=False)
 
 
 def switch_host_with_param(request, param_name):
@@ -1521,10 +1713,13 @@ class S3EndpointSetter(object):
     _DEFAULT_DNS_SUFFIX = 'amazonaws.com'
 
     def __init__(self, endpoint_resolver, region=None,
-                 s3_config=None, endpoint_url=None, partition=None):
+                 s3_config=None, endpoint_url=None, partition=None,
+                 use_fips_endpoint=False):
+        # This is calling the endpoint_resolver in regions.py
         self._endpoint_resolver = endpoint_resolver
         self._region = region
         self._s3_config = s3_config
+        self._use_fips_endpoint = use_fips_endpoint
         if s3_config is None:
             self._s3_config = {}
         self._endpoint_url = endpoint_url
@@ -1534,6 +1729,7 @@ class S3EndpointSetter(object):
 
     def register(self, event_emitter):
         event_emitter.register('before-sign.s3', self.set_endpoint)
+        event_emitter.register('choose-signer.s3', self.set_signer)
         event_emitter.register(
             'before-call.s3.WriteGetObjectResponse',
             self.update_endpoint_to_s3_object_lambda
@@ -1551,10 +1747,12 @@ class S3EndpointSetter(object):
             return
 
         resolver = self._endpoint_resolver
+        # Constructing endpoints as s3-object-lambda as region
         resolved = resolver.construct_endpoint('s3-object-lambda', self._region)
 
         # Ideally we would be able to replace the endpoint before
         # serialization but there's no event to do that currently
+        # host_prefix is all the arn/bucket specs
         new_endpoint = 'https://{host_prefix}{hostname}'.format(
             host_prefix=params['host_prefix'],
             hostname=resolved['hostname'],
@@ -1565,6 +1763,8 @@ class S3EndpointSetter(object):
     def set_endpoint(self, request, **kwargs):
         if self._use_accesspoint_endpoint(request):
             self._validate_accesspoint_supported(request)
+            self._validate_fips_supported(request)
+            self._validate_global_regions(request)
             region_name = self._resolve_region_for_accesspoint_endpoint(
                 request)
             self._resolve_signing_name_for_accesspoint_endpoint(
@@ -1572,12 +1772,66 @@ class S3EndpointSetter(object):
             self._switch_to_accesspoint_endpoint(request, region_name)
             return
         if self._use_accelerate_endpoint:
+            if self._use_fips_endpoint:
+                raise UnsupportedS3ConfigurationError(
+                    msg=(
+                        'Client is configured to use the FIPS psuedo region '
+                        'for "%s", but S3 Accelerate does not have any FIPS '
+                        'compatible endpoints.' % (self._region)
+                    )
+                )
             switch_host_s3_accelerate(request=request, **kwargs)
         if self._s3_addressing_handler:
             self._s3_addressing_handler(request=request, **kwargs)
 
     def _use_accesspoint_endpoint(self, request):
         return 's3_accesspoint' in request.context
+
+    def _validate_fips_supported(self, request):
+        if not self._use_fips_endpoint:
+            return
+        if 'fips' in request.context['s3_accesspoint']['region']:
+            raise UnsupportedS3AccesspointConfigurationError(
+                msg={
+                    'Invalid ARN, FIPS region not allowed in ARN.'
+                }
+            )
+        if 'outpost_name' in request.context['s3_accesspoint']:
+            raise UnsupportedS3AccesspointConfigurationError(
+                msg=(
+                    'Client is configured to use the FIPS psuedo-region "%s", '
+                    'but outpost ARNs do not support FIPS endpoints.' % (
+                        self._region)
+                )
+            )
+        # Transforming psuedo region to actual region
+        accesspoint_region = request.context['s3_accesspoint']['region']
+        if accesspoint_region != self._region:
+            if not self._s3_config.get('use_arn_region', True):
+                # TODO: Update message to reflect use_arn_region
+                # is not set
+                raise UnsupportedS3AccesspointConfigurationError(
+                    msg=(
+                        'Client is configured to use the FIPS psuedo-region '
+                        'for "%s", but the access-point ARN provided is for '
+                        'the "%s" region. For clients using a FIPS '
+                        'psuedo-region calls to access-point ARNs in another '
+                        'region are not allowed.' % (self._region,
+                                                     accesspoint_region)
+                    )
+                )
+
+    def _validate_global_regions(self, request):
+        if self._s3_config.get('use_arn_region', True):
+            return
+        if self._region in ['aws-global', 's3-external-1']:
+            raise UnsupportedS3AccesspointConfigurationError(
+                msg=(
+                    'Client is configured to use the global psuedo-region '
+                    '"%s". When providing access-point ARNs a regional '
+                    'endpoint must be specified.' % self._region
+                )
+            )
 
     def _validate_accesspoint_supported(self, request):
         if self._use_accelerate_endpoint:
@@ -1613,9 +1867,31 @@ class S3EndpointSetter(object):
                     'when an outpost ARN is specified.'
                 )
             )
+        self._validate_mrap_s3_config(request)
+
+    def _validate_mrap_s3_config(self, request):
+        if not is_global_accesspoint(request.context):
+            return
+        if self._s3_config.get('s3_disable_multiregion_access_points'):
+            raise UnsupportedS3AccesspointConfigurationError(
+                msg=(
+                    'Invalid configuration, Multi-Region Access Point '
+                    'ARNs are disabled.'
+                )
+            )
+        elif self._s3_config.get('use_dualstack_endpoint'):
+            raise UnsupportedS3AccesspointConfigurationError(
+                msg=(
+                    'Client does not support s3 dualstack configuration '
+                    'when a Multi-Region Access Point ARN is specified.'
+                )
+            )
 
     def _resolve_region_for_accesspoint_endpoint(self, request):
-        if self._s3_config.get('use_arn_region', True):
+        if is_global_accesspoint(request.context):
+            # Requests going to MRAP endpoints MUST be set to any (*) region.
+            self._override_signing_region(request, '*')
+        elif self._s3_config.get('use_arn_region', True):
             accesspoint_region = request.context['s3_accesspoint']['region']
             # If we are using the region from the access point,
             # we will also want to make sure that we set it as the
@@ -1623,6 +1899,17 @@ class S3EndpointSetter(object):
             self._override_signing_region(request, accesspoint_region)
             return accesspoint_region
         return self._region
+
+    def set_signer(self, context, **kwargs):
+        if is_global_accesspoint(context):
+            if HAS_CRT:
+                return 's3v4a'
+            else:
+                raise MissingDependencyException(
+                    msg="Using S3 with an MRAP arn requires an additional "
+                    "dependency. You will need to pip install "
+                    "botocore[crt] before proceeding."
+                )
 
     def _resolve_signing_name_for_accesspoint_endpoint(self, request):
         accesspoint_service = request.context['s3_accesspoint']['service']
@@ -1632,7 +1919,7 @@ class S3EndpointSetter(object):
         original_components = urlsplit(request.url)
         accesspoint_endpoint = urlunsplit((
             original_components.scheme,
-            self._get_accesspoint_netloc(request.context, region_name),
+            self._get_netloc(request.context, region_name),
             self._get_accesspoint_path(
                 original_components.path, request.context),
             original_components.query,
@@ -1641,6 +1928,32 @@ class S3EndpointSetter(object):
         logger.debug(
             'Updating URI from %s to %s' % (request.url, accesspoint_endpoint))
         request.url = accesspoint_endpoint
+
+    def _get_netloc(self, request_context, region_name):
+        if is_global_accesspoint(request_context):
+            return self._get_mrap_netloc(request_context)
+        else:
+            return self._get_accesspoint_netloc(request_context, region_name)
+
+    def _get_mrap_netloc(self, request_context):
+        s3_accesspoint = request_context['s3_accesspoint']
+        region_name = 's3-global'
+        mrap_netloc_components = [
+            s3_accesspoint['name']
+        ]
+        if self._endpoint_url:
+            endpoint_url_netloc = urlsplit(self._endpoint_url).netloc
+            mrap_netloc_components.append(endpoint_url_netloc)
+        else:
+            partition = s3_accesspoint['partition']
+            mrap_netloc_components.extend(
+                [
+                    'accesspoint',
+                    region_name,
+                    self._get_partition_dns_suffix(partition)
+                ]
+            )
+        return '.'.join(mrap_netloc_components)
 
     def _get_accesspoint_netloc(self, request_context, region_name):
         s3_accesspoint = request_context['s3_accesspoint']
@@ -1658,9 +1971,13 @@ class S3EndpointSetter(object):
                 outpost_host = [outpost_name, 's3-outposts']
                 accesspoint_netloc_components.extend(outpost_host)
             elif s3_accesspoint['service'] == 's3-object-lambda':
-                accesspoint_netloc_components.append('s3-object-lambda')
+                component = self._inject_fips_if_needed(
+                    's3-object-lambda', request_context)
+                accesspoint_netloc_components.append(component)
             else:
-                accesspoint_netloc_components.append('s3-accesspoint')
+                component = self._inject_fips_if_needed(
+                    's3-accesspoint', request_context)
+                accesspoint_netloc_components.append(component)
             if self._s3_config.get('use_dualstack_endpoint'):
                 accesspoint_netloc_components.append('dualstack')
             accesspoint_netloc_components.extend(
@@ -1671,6 +1988,11 @@ class S3EndpointSetter(object):
             )
         return '.'.join(accesspoint_netloc_components)
 
+    def _inject_fips_if_needed(self, component, request_context):
+        if self._use_fips_endpoint:
+            return '%s-fips' % component
+        return component
+
     def _get_accesspoint_path(self, original_path, request_context):
         # The Bucket parameter was substituted with the access-point name as
         # some value was required in serializing the bucket name. Now that
@@ -1679,6 +2001,14 @@ class S3EndpointSetter(object):
         name = request_context['s3_accesspoint']['name']
         # All S3 operations require at least a / in their path.
         return original_path.replace('/' + name, '', 1) or '/'
+
+    def _get_partition_dns_suffix(self, partition_name):
+        dns_suffix = self._endpoint_resolver.get_partition_dns_suffix(
+            partition_name
+        )
+        if dns_suffix is None:
+            dns_suffix = self._DEFAULT_DNS_SUFFIX
+        return dns_suffix
 
     def _get_dns_suffix(self, region_name):
         resolved = self._endpoint_resolver.construct_endpoint(
@@ -1776,17 +2106,18 @@ class S3EndpointSetter(object):
         return fix_s3_host
 
 
-
 class S3ControlEndpointSetter(object):
     _DEFAULT_PARTITION = 'aws'
     _DEFAULT_DNS_SUFFIX = 'amazonaws.com'
     _HOST_LABEL_REGEX = re.compile(r'^[a-zA-Z0-9\-]{1,63}$')
 
     def __init__(self, endpoint_resolver, region=None,
-                 s3_config=None, endpoint_url=None, partition=None):
+                 s3_config=None, endpoint_url=None, partition=None,
+                 use_fips_endpoint=False):
         self._endpoint_resolver = endpoint_resolver
         self._region = region
         self._s3_config = s3_config
+        self._use_fips_endpoint = use_fips_endpoint
         if s3_config is None:
             self._s3_config = {}
         self._endpoint_url = endpoint_url
@@ -1806,7 +2137,6 @@ class S3ControlEndpointSetter(object):
             self._add_headers_from_arn_details(request)
         elif self._use_endpoint_from_outpost_id(request):
             self._validate_outpost_redirection_valid(request)
-            outpost_id = request.context['outpost_id']
             self._override_signing_name(request, 's3-outposts')
             new_netloc = self._construct_outpost_endpoint(self._region)
             self._update_request_netloc(request, new_netloc)
@@ -1818,6 +2148,13 @@ class S3ControlEndpointSetter(object):
         return 'outpost_id' in request.context
 
     def _validate_endpoint_from_arn_details_supported(self, request):
+        if 'fips' in request.context['arn_details']['region']:
+            raise UnsupportedS3ControlArnError(
+                arn=request.context['arn_details']['original'],
+                msg={
+                    'Invalid ARN, FIPS region not allowed in ARN.'
+                }
+            )
         if not self._s3_config.get('use_arn_region', False):
             arn_region = request.context['arn_details']['region']
             if arn_region != self._region:
@@ -1925,10 +2262,15 @@ class S3ControlEndpointSetter(object):
                 region_name,
                 self._get_dns_suffix(region_name),
             ]
+            self._add_fips(netloc)
         return self._construct_netloc(netloc)
 
     def _construct_netloc(self, netloc):
         return '.'.join(netloc)
+
+    def _add_fips(self, netloc):
+        if self._use_fips_endpoint:
+            netloc[0] = netloc[0] + '-fips'
 
     def _add_dualstack(self, netloc):
         if self._s3_config.get('use_dualstack_endpoint'):
@@ -2221,6 +2563,35 @@ def should_bypass_proxies(url):
     return False
 
 
+def determine_content_length(body):
+    # No body, content length of 0
+    if not body:
+        return 0
+
+    # Try asking the body for it's length
+    try:
+        return len(body)
+    except (AttributeError, TypeError):
+        pass
+
+    # Try getting the length from a seekable stream
+    if hasattr(body, 'seek') and hasattr(body, 'tell'):
+        try:
+            orig_pos = body.tell()
+            body.seek(0, 2)
+            end_file_pos = body.tell()
+            body.seek(orig_pos)
+            return end_file_pos - orig_pos
+        except io.UnsupportedOperation:
+            # in case when body is, for example, io.BufferedIOBase object
+            # it has "seek" method which throws "UnsupportedOperation"
+            # exception in such case we want to fall back to "chunked"
+            # encoding
+            pass
+    # Failed to determine the length
+    return None
+
+
 def get_encoding_from_headers(headers, default='ISO-8859-1'):
     """Returns encodings from given HTTP Header Dict.
 
@@ -2268,6 +2639,16 @@ def conditionally_calculate_md5(params, **kwargs):
     """Only add a Content-MD5 if the system supports it."""
     headers = params['headers']
     body = params['body']
+    checksum_context = params.get('context', {}).get('checksum', {})
+    checksum_algorithm = checksum_context.get('request_algorithm')
+    if checksum_algorithm and checksum_algorithm != 'conditional-md5':
+        # Skip for requests that will have a flexible checksum applied
+        return
+    # If a header matching the x-amz-checksum-* pattern is present, we
+    # assume a checksum has already been provided and an md5 is not needed
+    for header in headers:
+        if CHECKSUM_HEADER_PATTERN.match(header):
+            return
     if MD5_AVAILABLE and body is not None and 'Content-MD5' not in headers:
         md5_digest = calculate_md5(body, **kwargs)
         params['headers']['Content-MD5'] = md5_digest
@@ -2304,3 +2685,96 @@ class SSOTokenLoader(object):
                 'invalid.'
             )
             raise SSOTokenLoadError(error_msg=error_msg)
+
+
+class EventbridgeSignerSetter:
+    _DEFAULT_PARTITION = 'aws'
+    _DEFAULT_DNS_SUFFIX = 'amazonaws.com'
+
+    def __init__(
+        self,
+        endpoint_resolver,
+        region=None,
+        endpoint_url=None
+    ):
+        self._endpoint_resolver = endpoint_resolver
+        self._region = region
+        self._endpoint_url = endpoint_url
+
+    def register(self, event_emitter):
+        event_emitter.register(
+            'before-parameter-build.events.PutEvents',
+            self.check_for_global_endpoint
+        )
+        event_emitter.register(
+            'before-call.events.PutEvents',
+            self.set_endpoint_url
+        )
+
+    def set_endpoint_url(self, params, context, **kwargs):
+        if 'eventbridge_endpoint' in context:
+            endpoint = context['eventbridge_endpoint']
+            logger.debug(
+                f"Rewriting URL from {params['url']} to {endpoint}"
+            )
+            params['url'] = endpoint
+
+    def check_for_global_endpoint(self, params, context, **kwargs):
+        endpoint = params.get('EndpointId')
+        if endpoint is None:
+            return
+
+        if len(endpoint) == 0:
+            raise InvalidEndpointConfigurationError(
+                msg='EndpointId must not be a zero length string'
+            )
+
+        if not HAS_CRT:
+            raise MissingDependencyException(
+                msg="Using EndpointId requires an additional "
+                    "dependency. You will need to pip install "
+                    "botocore[crt] before proceeding."
+            )
+
+        config = context.get('client_config')
+        endpoint_variant_tags = None
+        if config is not None:
+            if config.use_fips_endpoint:
+                raise InvalidEndpointConfigurationError(
+                    msg="FIPS is not supported with EventBridge "
+                    "multi-region endpoints."
+                )
+            if config.use_dualstack_endpoint:
+                endpoint_variant_tags = ['dualstack']
+
+        if self._endpoint_url is None:
+            # Validate endpoint is a valid hostname component
+            parts = urlparse(f'https://{endpoint}')
+            if parts.hostname != endpoint:
+                raise InvalidEndpointConfigurationError(
+                    msg='EndpointId is not a valid hostname component.'
+                )
+            resolved_endpoint = self._get_global_endpoint(
+                endpoint,
+                endpoint_variant_tags=endpoint_variant_tags
+            )
+        else:
+            resolved_endpoint = self._endpoint_url
+
+        context['eventbridge_endpoint'] = resolved_endpoint
+        context['auth_type'] = 'v4a'
+
+    def _get_global_endpoint(self, endpoint, endpoint_variant_tags=None):
+        resolver = self._endpoint_resolver
+
+        partition = resolver.get_partition_for_region(self._region)
+        if partition is None:
+            partition = self._DEFAULT_PARTITION
+        dns_suffix = resolver.get_partition_dns_suffix(
+            partition,
+            endpoint_variant_tags=endpoint_variant_tags
+        )
+        if dns_suffix is None:
+            dns_suffix = self._DEFAULT_DNS_SUFFIX
+
+        return f"https://{endpoint}.endpoint.events.{dns_suffix}/"
